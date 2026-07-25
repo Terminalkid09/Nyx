@@ -1,5 +1,8 @@
+import sys
+import types
 import pytest
 import uuid
+from unittest.mock import patch
 
 
 @pytest.fixture
@@ -79,7 +82,9 @@ class TestReporterService:
     @pytest.mark.asyncio
     async def test_generate_pdf_fallback_to_html(self, reporter, sample_findings):
         sid = uuid.uuid4()
-        result = await reporter.generate(session_id=sid, findings=sample_findings, request_count=10, format="pdf")
+        fake_mod = types.ModuleType("weasyprint")
+        with patch.dict(sys.modules, {"weasyprint": fake_mod}):
+            result = await reporter.generate(session_id=sid, findings=sample_findings, request_count=10, format="pdf")
         html = result.decode()
         assert "<!DOCTYPE html>" in html
 

@@ -2,12 +2,7 @@ import asyncio
 import logging
 import socket
 
-from scapy.all import IP, UDP, DNS, DNSQR, DNSRR, send
-from scapy.config import conf
-
 logger = logging.getLogger(__name__)
-
-conf.verb = 0
 
 
 class DNSSpoofer:
@@ -44,8 +39,19 @@ class DNSSpoofer:
             self._sock = None
         logger.info("DNS spoofer stopped")
 
+    _scapy_initialized = False
+
+    @staticmethod
+    def _init_scapy():
+        if not DNSSpoofer._scapy_initialized:
+            from scapy.config import conf
+            conf.verb = 0
+            DNSSpoofer._scapy_initialized = True
+
     def _build_spoof_response(self, query_data: bytes, client_addr: tuple) -> bytes | None:
         """Construct a forged DNS response pointing the queried domain to the spoof IP."""
+        self._init_scapy()
+        from scapy.all import IP, UDP, DNS, DNSRR
         try:
             pkt = IP(query_data[20:])  # strip IP header if present
             if UDP not in pkt:

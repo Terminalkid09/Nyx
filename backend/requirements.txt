@@ -13,3 +13,4 @@ pydantic-settings>=2.3.0,<3.0.0
 playwright>=1.44.0,<2.0.0
 jinja2>=3.1.0,<4.0.0
 weasyprint>=62.0,<64.0
+scapy>=2.5.0,<3.0.0
