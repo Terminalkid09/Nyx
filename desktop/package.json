@@ -1,0 +1,83 @@
+{
+  "name": "nyx-desktop",
+  "version": "1.0.0",
+  "description": "Nyx — Security Testing Suite",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux",
+    "build:collab": "cd ../collaborator && go build -ldflags=\"-s -w\" -o ../dist/nyx-collaborator.exe .",
+    "build:backend": "cd .. && pyinstaller --noconfirm desktop/nyx-backend.spec && cd desktop && npm run build:collab"
+  },
+  "build": {
+    "appId": "com.nyx.desktop",
+    "productName": "Nyx",
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "../dist",
+        "to": "backend",
+        "filter": ["nyx-backend*", "nyx-collaborator*"]
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "icon.png",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "icon.png",
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": true,
+      "runAfterFinish": false
+    },
+    "dmg": {
+      "title": "Nyx ${version}",
+      "icon": "icon.png"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Terminalkid09",
+        "repo": "nyx"
+      }
+    ]
+  },
+  "author": "Nyx Developer",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
