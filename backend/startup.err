@@ -1,0 +1,8 @@
+WARNING: No libpcap provider available ! pcap won't be used
+INFO:main:Initializing database...
+INFO:core.storage.database:Database migrations applied successfully
+INFO:modules.automation.engine:AutoScanEngine started
+INFO:mitmproxy.proxy.mode_servers:Transparent Proxy listening at *:8080.
+INFO:modules.session_handling.engine:Session handling engine started
+INFO:modules.automations.scheduled_scans:Scheduled scan service started
+INFO:main:Proxy engine started on 0.0.0.0:8080

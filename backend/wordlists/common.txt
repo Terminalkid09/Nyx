@@ -1,0 +1,14 @@
+admin/
+login
+\.htaccess
+\.env
+config/
+backup/
+wp-admin/
+api/
+v1/
+v2/
+graphql
+swagger.json
+.git/
+.svn/
