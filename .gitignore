@@ -1,0 +1,94 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.env
+*.egg/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Build and Binary
+*.so
+*.dll
+*.dylib
+*.exe
+*.dmg
+*.AppImage
+*.pdb
+
+# Data and Logs
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.log
+backend/data/
+data/
+*.nyx
+*.bloom
+
+# Reports
+backend/reports/
+nyx_reports/
+
+# PyInstaller
+*.spec
+*.manifest
+**/build/*/
+
+!desktop/nyx-backend.spec
+
+# Desktop artifacts
+desktop/dist/
+desktop/build/
+desktop/release/
+desktop/out/
+desktop/node_modules/
+
+# Desktop Artifacts
+desktop/dist/
+desktop/dist_old/
+desktop/build/
+desktop/release/
+desktop/out/
+desktop/node_modules/
+
+# Collaborator (Go)
+collaborator/collaborator
+collaborator/collaborator.exe
+collaborator/*.test
+collaborator/vendor/
+
+# Native C++ build
+native/build/
+native/cmake-build-*/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.temp
+
+# GitHub Actions
+!.github/

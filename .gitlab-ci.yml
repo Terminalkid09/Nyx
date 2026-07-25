@@ -1,0 +1,89 @@
+stages:
+  - build
+  - test
+  - test-e2e
+  - lint
+
+variables:
+  DOCKER_DRIVER: overlay2
+  SECRET_KEY: ci-test-secret
+
+backend-build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker build -f backend/Dockerfile -t nyx-backend .
+  only:
+    - main
+    - develop
+
+frontend-build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker build -f frontend/Dockerfile -t nyx-frontend frontend/
+  only:
+    - main
+    - develop
+
+backend-unit-test:
+  stage: test
+  image: python:3.10-slim
+  services:
+    - postgres:16-alpine
+  variables:
+    DATABASE_URL: postgresql+asyncpg://nyx:nyx@postgres:5432/nyx_test
+    POSTGRES_USER: nyx
+    POSTGRES_PASSWORD: nyx
+    POSTGRES_DB: nyx_test
+  before_script:
+    - cd backend
+    - pip install -r requirements.txt
+    - pip install pytest pytest-asyncio pytest-httpx httpx mitmproxy
+  script:
+    - python -m pytest tests/ -v --junitxml=report.xml -k "not test_proxy_e2e"
+  artifacts:
+    reports:
+      junit: backend/report.xml
+
+backend-e2e-test:
+  stage: test-e2e
+  image: python:3.10-slim
+  variables:
+    SECRET_KEY: ci-test-secret
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends net-tools iproute2
+    - cd backend
+    - pip install -r requirements.txt
+    - pip install pytest pytest-asyncio httpx mitmproxy
+  script:
+    - python -m pytest tests/test_proxy_e2e.py -v --junitxml=report-e2e.xml
+  artifacts:
+    reports:
+      junit: backend/report-e2e.xml
+
+backend-lint:
+  stage: lint
+  image: python:3.10-slim
+  before_script:
+    - pip install ruff
+  script:
+    - cd backend && ruff check . --output-format=gitlab
+  only:
+    - main
+    - develop
+
+frontend-lint:
+  stage: lint
+  image: node:20-alpine
+  before_script:
+    - cd frontend && npm ci
+  script:
+    - cd frontend && npx tsc --noEmit
+  only:
+    - main
+    - develop
