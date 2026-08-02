@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from api.deps import get_db
@@ -13,9 +13,15 @@ router = APIRouter(prefix="/api/triage", tags=["triage"])
 
 
 @router.get("/findings/grouped")
-async def get_grouped_findings(db: AsyncSession = Depends(get_db)):
+async def get_grouped_findings(
+    session_id: uuid.UUID = Query(..., description="Session to scope findings to"),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
-        select(Finding).options(selectinload(Finding.request)).order_by(Finding.created_at.desc())
+        select(Finding)
+        .where(Finding.session_id == session_id)
+        .options(selectinload(Finding.request))
+        .order_by(Finding.created_at.desc())
     )
     findings = result.scalars().all()
 
@@ -30,6 +36,13 @@ async def get_grouped_findings(db: AsyncSession = Depends(get_db)):
                 "severity": f.severity.value,
                 "count": 0,
                 "endpoint": path,
+                "host": (f.request.host or "") if f.request else "",
+                "method": (f.request.method or "GET") if f.request else "GET",
+                "url": (f.request.url or "") if f.request else "",
+                "request_headers": (f.request.request_headers or {}) if f.request else {},
+                "request_body": (f.request.request_body or "") if f.request else "",
+                "request_id": str(f.request_id) if f.request_id else "",
+                "request_session_id": str(f.request.session_id) if f.request and f.request.session_id else "",
                 "vuln_type": f.title,
                 "evidence_preview": (f.evidence or "")[:200],
                 "first_seen": f.created_at.isoformat() if f.created_at else "",
@@ -37,6 +50,11 @@ async def get_grouped_findings(db: AsyncSession = Depends(get_db)):
             }
         g = groups[key]
         g["count"] += 1
+        if f.request and f.request.request_body and not g["request_body"]:
+            g["request_body"] = f.request.request_body
+            g["method"] = f.request.method or g["method"]
+            g["url"] = f.request.url or g["url"]
+            g["request_headers"] = f.request.request_headers or {}
         if f.evidence and not g["evidence_preview"]:
             g["evidence_preview"] = f.evidence[:200]
         seen = f.created_at.isoformat() if f.created_at else ""
@@ -80,11 +98,18 @@ async def retest_finding(finding_id: uuid.UUID, db: AsyncSession = Depends(get_d
 
 
 @router.get("/stats")
-async def get_stats(db: AsyncSession = Depends(get_db)):
-    total_findings_result = await db.execute(select(func.count(Finding.id)))
+async def get_stats(
+    session_id: uuid.UUID = Query(..., description="Session to scope stats to"),
+    db: AsyncSession = Depends(get_db),
+):
+    total_findings_result = await db.execute(
+        select(func.count(Finding.id)).where(Finding.session_id == session_id)
+    )
     total_findings = total_findings_result.scalar() or 0
 
-    all_sev_result = await db.execute(select(Finding.severity))
+    all_sev_result = await db.execute(
+        select(Finding.severity).where(Finding.session_id == session_id)
+    )
     severity_counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for row in all_sev_result.all():
         s = row[0]
@@ -92,15 +117,22 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         if sev in severity_counts:
             severity_counts[sev] += 1
 
-    unique_types_result = await db.execute(select(Finding.title).distinct())
+    unique_types_result = await db.execute(
+        select(Finding.title).distinct().where(Finding.session_id == session_id)
+    )
     unique_vuln_types = [row[0] for row in unique_types_result.all()]
 
-    unique_endpoints_result = await db.execute(select(Request.path).distinct().limit(1000))
+    unique_endpoints_result = await db.execute(
+        select(Request.path).distinct().where(Request.session_id == session_id).limit(1000)
+    )
     unique_endpoints = [row[0] for row in unique_endpoints_result.all() if row[0]]
 
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     proxy_requests_today_result = await db.execute(
-        select(func.count(Request.id)).where(Request.timestamp >= today_start)
+        select(func.count(Request.id)).where(
+            Request.session_id == session_id,
+            Request.timestamp >= today_start,
+        )
     )
     proxy_requests_today = proxy_requests_today_result.scalar() or 0
 
@@ -146,6 +178,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 
 @router.get("/findings/recent")
 async def get_recent_findings(
+    session_id: uuid.UUID = Query(..., description="Session to scope findings to"),
     hours: int = Query(24, description="Lookback period in hours"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -153,7 +186,7 @@ async def get_recent_findings(
     result = await db.execute(
         select(Finding)
         .options(selectinload(Finding.request))
-        .where(Finding.created_at >= since)
+        .where(Finding.session_id == session_id, Finding.created_at >= since)
         .order_by(Finding.created_at.desc())
         .limit(20)
     )

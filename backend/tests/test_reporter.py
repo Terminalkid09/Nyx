@@ -168,10 +168,15 @@ class TestAutoReportService:
     @pytest.mark.asyncio
     async def test_generate_report_delegates_returns_dict(self, auto_reporter):
         try:
-            result = await auto_reporter.generate_report(scan_name="Test Scan")
+            result = await auto_reporter.generate_report(session_id=str(uuid.uuid4()), scan_name="Test Scan")
             assert isinstance(result, dict)
             assert "report_metadata" in result
         except Exception as e:
             if "no such table" in str(e).lower():
                 pytest.skip("Database tables not initialized")
             raise
+
+    @pytest.mark.asyncio
+    async def test_generate_report_requires_session(self, auto_reporter):
+        with pytest.raises(ValueError):
+            await auto_reporter.generate_report(session_id="", scan_name="Test Scan")

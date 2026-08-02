@@ -81,3 +81,32 @@ class TestScopeModule:
     def test_make_scope_checker_import(self):
         from core.scope import make_scope_checker
         assert callable(make_scope_checker)
+
+
+class TestResetSessionData:
+    def test_session_data_models_include_core_tables(self):
+        from core.storage.crud.sessions import SESSION_DATA_MODELS
+        names = [m.__name__ for m in SESSION_DATA_MODELS]
+        for required in ["Request", "Finding", "FuzzJob", "ScanJob", "MatchReplaceRule"]:
+            assert required in names, required
+
+    async def test_reset_returns_false_for_missing_session(self):
+        from unittest.mock import AsyncMock, Mock
+        from core.storage.crud.sessions import reset_session_data
+        db = AsyncMock()
+        db.execute.return_value.scalar_one_or_none = Mock(return_value=None)
+        result = await reset_session_data(db, __import__('uuid').uuid4())
+        assert result is False
+
+    def test_endpoint_registered(self):
+        from api.routes.sessions import router
+        routes = [r.path for r in router.routes]
+        assert "/api/sessions/{session_id}/data" in routes
+        assert "DELETE" in {m for r in router.routes for m in r.methods if getattr(r, 'methods', None)}
+
+
+class TestLightweightMigration:
+    def test_migrations_map_has_findings(self):
+        from core.storage.database import _ADD_COLUMN_MIGRATIONS
+        assert "findings" in _ADD_COLUMN_MIGRATIONS
+        assert ("cvss_vector", "VARCHAR(64)") in _ADD_COLUMN_MIGRATIONS["findings"]

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 import httpx
 from core.events.bus import EventBus
+from core.storage.traffic import DEFAULT_SESSION_ID
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,21 @@ class ContentDiscoveryService:
         discovered = []
         completed = 0
 
+        # Baseline check for wildcards
+        wildcard_signatures = set()
+        random_path = f"nyx-not-found-{uuid.uuid4().hex}"
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10) as client:
+                w_url = target_url.rstrip("/") + "/" + random_path
+                w_resp = await client.request(methods[0], w_url, follow_redirects=False)
+                if w_resp.status_code != 404:
+                    wildcard_signatures.add((w_resp.status_code, len(w_resp.content)))
+                    logger.info("Wildcard detected: %s (Status: %s, Length: %s)", target_url, w_resp.status_code, len(w_resp.content))
+        except Exception as e:
+            logger.debug("Wildcard check failed: %s", e)
+
+        SENSITIVE_EXTS = {".env", ".bak", ".sql", ".zip", ".tar.gz", ".git", ".config", "config.php", "web.config"}
+
         async def check_path(base_url: str, raw_path: str, method: str) -> dict | None:
             if job_id in self._cancel_flags:
                 return None
@@ -80,14 +96,34 @@ class ContentDiscoveryService:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
 
                 if resp.status_code != 404:
-                    return {
-                        "url": url,
-                        "path": path,
-                        "method": method,
-                        "status_code": resp.status_code,
-                        "size": len(resp.content),
-                        "time_ms": elapsed_ms,
-                    }
+                    sig = (resp.status_code, len(resp.content))
+                    if sig not in wildcard_signatures:
+                        # Auto-promote sensitive files to Findings
+                        is_sensitive = any(path.endswith(ext) or path.startswith(ext.strip('.')) for ext in SENSITIVE_EXTS)
+                        if is_sensitive:
+                            await self.event_bus.publish({
+                                "type": "finding.created",
+                                "id": str(uuid.uuid4()),
+                                "session_id": session_id or str(DEFAULT_SESSION_ID),
+                                "request_id": None,
+                                "module": "content_discovery",
+                                "severity": "high",
+                                "title": f"Sensitive File Exposed: {path}",
+                                "description": f"Content discovery found a potentially sensitive file at `{url}`.",
+                                "evidence": f"Status Code: {resp.status_code}\nSize: {len(resp.content)} bytes",
+                                "cwe": "CWE-200",
+                                "cvss_score": 7.5,
+                                "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+                            })
+
+                        return {
+                            "url": url,
+                            "path": path,
+                            "method": method,
+                            "status_code": resp.status_code,
+                            "size": len(resp.content),
+                            "time_ms": elapsed_ms,
+                        }
             except Exception as e:
                 logger.debug("Request failed for %s %s: %s", method, url, e)
 

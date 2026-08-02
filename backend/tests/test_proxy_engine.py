@@ -9,31 +9,33 @@ class TestProxyEngineSwitchMode:
         from core.proxy.engine import ProxyEngine
         bus = MagicMock()
         engine = ProxyEngine(bus, mode="transparent")
-        result = engine.switch_to_transparent()
+        result, msg = engine.switch_to_transparent()
         assert result is True
         assert engine.mode == "transparent"
 
-    @patch("core.proxy.engine.DumpMaster")
-    @patch("core.proxy.engine.asyncio.new_event_loop")
-    def test_switch_to_transparent_from_regular(self, mock_loop, mock_dump):
+    @patch("core.proxy.engine.ProxyEngine.start")
+    @patch("platform.system", return_value="Linux")
+    def test_switch_to_transparent_from_regular(self, mock_sys, mock_start):
         from core.proxy.engine import ProxyEngine
+        mock_start.return_value = (True, "Proxy running")
         bus = MagicMock()
         engine = ProxyEngine(bus, mode="regular")
         engine.fastapi_loop = MagicMock()
-        mock_loop_instance = MagicMock()
-        mock_loop.return_value = mock_loop_instance
-        result = engine.switch_to_transparent()
+        engine.stop = MagicMock()
+        result, msg = engine.switch_to_transparent()
         assert result is True
         assert engine.mode == "transparent"
+        engine.stop.assert_called_once()
 
     @patch("core.proxy.engine.DumpMaster")
     @patch("core.proxy.engine.asyncio.new_event_loop")
-    def test_switch_to_transparent_no_fastapi_loop(self, mock_loop, mock_dump):
+    @patch("platform.system", return_value="Linux")
+    def test_switch_to_transparent_no_fastapi_loop(self, mock_sys, mock_loop, mock_dump):
         from core.proxy.engine import ProxyEngine
         bus = MagicMock()
         engine = ProxyEngine(bus, mode="regular")
         engine.fastapi_loop = None
-        result = engine.switch_to_transparent()
+        result, msg = engine.switch_to_transparent()
         assert result is False
         assert engine.mode == "regular"
 
@@ -93,7 +95,7 @@ class TestSetupTransparentRedirectFull:
         with patch("platform.system", return_value="Windows"):
             from core.proxy.engine import setup_transparent_redirect
             cmds = setup_transparent_redirect(9090, enable=True)
-            assert any("forwarding enabled" in c for c in cmds)
+            assert len(cmds) == 0
 
     def test_enable_returns_nonempty(self):
         with patch("platform.system", return_value="Linux"):
@@ -105,8 +107,7 @@ class TestSetupTransparentRedirectFull:
         with patch("platform.system", return_value="Windows"):
             from core.proxy.engine import setup_transparent_redirect
             cmds = setup_transparent_redirect(8080, enable=False)
-            assert len(cmds) > 0
-            assert any("forwarding disabled" in c for c in cmds)
+            assert len(cmds) == 0
 
     def test_macos_enable(self):
         with patch("platform.system", return_value="Darwin"):

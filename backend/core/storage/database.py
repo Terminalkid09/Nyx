@@ -7,9 +7,11 @@ from core.storage.models import Base
 logger = logging.getLogger(__name__)
 
 _is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
+    connect_args=_connect_args,
     **( {} if _is_sqlite else {"pool_size": 20, "max_overflow": 10} ),
 )
 
@@ -20,14 +22,56 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+async def _enable_wal():
+    if not _is_sqlite:
+        return
+    try:
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.exec_driver_sql("PRAGMA busy_timeout=5000")
+            await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        logger.info("SQLite WAL mode enabled")
+    except Exception as e:
+        logger.warning("Failed to enable WAL mode: %s", e)
+
+
+_ADD_COLUMN_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
+    "findings": [
+        ("cvss_vector", "VARCHAR(64)"),
+        ("cvss_score", "FLOAT"),
+    ],
+}
+
+
+async def _apply_lightweight_migrations():
+    """Add columns that were introduced after existing databases were created."""
+    if not _is_sqlite:
+        return
+    try:
+        async with engine.begin() as conn:
+            for table, columns in _ADD_COLUMN_MIGRATIONS.items():
+                existing = {
+                    row[1]
+                    for row in await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+                }
+                for col_name, col_type in columns:
+                    if col_name not in existing:
+                        await conn.exec_driver_sql(
+                            f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
+                        )
+                        logger.info("Added missing column %s.%s", table, col_name)
+    except Exception as e:
+        logger.warning("Lightweight migration failed: %s", e)
+
+
 async def run_alembic_migration():
-    # In PyInstaller frozen builds the alembic subprocess cannot import `core`,
-    # so we skip it and go straight to create_all.
+    await _enable_wal()
     if getattr(sys, "frozen", False):
         logger.info("Frozen build detected — DATABASE_URL=%r engine=%r", settings.DATABASE_URL, type(engine).__module__)
         logger.info("Using create_all instead of alembic subprocess")
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        await _apply_lightweight_migrations()
         logger.info("Database tables created successfully")
         return
 
@@ -56,6 +100,7 @@ async def run_alembic_migration():
         logger.warning("Alembic migration failed (%s), falling back to create_all", e)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        await _apply_lightweight_migrations()
         logger.info("create_all fallback completed")
 
 

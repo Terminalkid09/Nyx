@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 from core.events.bus import EventBus
 from core.storage.finding_events import persist_results
 from modules.scanner.fingerprint import fingerprint_server, select_checks_for_target
+from modules.scanner.cvss_mapper import get_cvss_for_cwe
 from modules.scanner.active.checks.active_api_key_url import ActiveApiKeyUrlCheck
 from modules.scanner.active.checks.active_cert_transparency import ActiveCertTransparencyCheck
 from modules.scanner.active.checks.active_cors_null_test import ActiveCorsNullTestCheck
@@ -346,23 +347,49 @@ class ActiveScanner:
                 rest = [c for c in checks_to_run if c.name not in prioritize_names]
                 checks_to_run = prioritized + rest
 
+        seen_findings = set()
+        
         for check in checks_to_run:
             try:
                 results = await check.run(base_request, target_params)
-                if self.event_bus:
-                    await persist_results(self.event_bus, results, event or base_request, check.name)
+                
+                # Apply CVSS and Deduplication
+                unique_results = []
                 for r in results:
                     if r.triggered:
-                        all_results.append({
-                            "check": check.name,
-                            "severity": r.severity,
-                            "title": r.title,
-                            "description": r.description,
-                            "evidence": r.evidence,
-                            "remediation": r.remediation,
-                            "cwe": r.cwe,
-                        })
-                        logger.info("Active check %s: %s", check.name, r.title)
+                        # Deduplication key: CWE + Title + Param
+                        # This avoids the same check firing multiple times for slightly different payloads on the same parameter
+                        dedup_key = f"{r.cwe}_{r.title}"
+                        if dedup_key in seen_findings:
+                            continue
+                        seen_findings.add(dedup_key)
+                        
+                        # Add CVSS data
+                        cvss_info = get_cvss_for_cwe(r.cwe) if r.cwe else None
+                        if cvss_info:
+                            r.cvss_score = cvss_info["score"]
+                            r.cvss_vector = cvss_info["vector"]
+                            if not hasattr(r, 'severity') or r.severity == "info":
+                                r.severity = cvss_info["severity"]
+                        
+                        unique_results.append(r)
+                
+                if unique_results and self.event_bus:
+                    await persist_results(self.event_bus, unique_results, event or base_request, check.name)
+                    
+                for r in unique_results:
+                    all_results.append({
+                        "check": check.name,
+                        "severity": r.severity,
+                        "title": r.title,
+                        "description": r.description,
+                        "evidence": r.evidence,
+                        "remediation": r.remediation,
+                        "cwe": r.cwe,
+                        "cvss_score": getattr(r, 'cvss_score', None),
+                        "cvss_vector": getattr(r, 'cvss_vector', None),
+                    })
+                    logger.info("Active check %s: %s (CVSS: %s)", check.name, r.title, getattr(r, 'cvss_score', 'N/A'))
             except Exception as e:
                 logger.error("Active check %s failed: %s", check.name, e)
         return all_results

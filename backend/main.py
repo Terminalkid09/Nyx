@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from core.config import settings
 from core.events.bus import EventBus
 from core.proxy.engine import ProxyEngine
@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
     ws_manager = WebSocketManager(event_bus)
     app.state.ws_manager = ws_manager
     app.state.event_bus = event_bus
+    app.state.proxy_engine = proxy_engine
 
     from modules.interceptor.engine import InterceptorEngine
     from modules.session_handling.engine import SessionHandlingEngine
@@ -65,6 +66,13 @@ async def lifespan(app: FastAPI):
     api_inspector.register()
     app.state.api_inspector = api_inspector
     init_auth_scanner(active_scanner)
+
+    # ── Auto-Auth Keeper (zero-config session recovery) ──────────────────
+    from modules.scanner.auth_keeper import AuthKeeper
+    auth_keeper = AuthKeeper(event_bus)
+    app.state.auth_keeper = auth_keeper
+    logger.info("Auth Keeper initialized — will auto-detect login flows and refresh sessions on 401")
+
     auto_scan_engine = AutoScanEngine(event_bus, passive_scanner, active_scanner)
     app.state.auto_scan_engine = auto_scan_engine
     await auto_scan_engine.start()
@@ -84,7 +92,10 @@ async def lifespan(app: FastAPI):
 
     loop = asyncio.get_event_loop()
     proxy_engine.current_session_id = str(DEFAULT_SESSION_ID)
-    proxy_engine.start(fastapi_loop=loop)
+    ok, msg = proxy_engine.start(fastapi_loop=loop)
+    if not ok:
+        logger.critical("Proxy engine failed to start: %s", msg)
+        raise RuntimeError(f"Proxy engine failed to start: {msg}")
 
     try:
         await session_handling_engine.start()
@@ -103,6 +114,10 @@ async def lifespan(app: FastAPI):
     from modules.automations.scheduled_scans import ScheduledScanService
     from modules.automations.webhooks import WebhookService
 
+    recommender_engine = RecommendationEngine(event_bus)
+    app.state.recommender_engine = recommender_engine
+    init_recommender(recommender_engine)
+
     scheduled_scan_service = ScheduledScanService(event_bus)
     scheduled_scan_service.start()
     app.state.scheduled_scan_service = scheduled_scan_service
@@ -110,6 +125,11 @@ async def lifespan(app: FastAPI):
     webhook_service = WebhookService(event_bus)
     await webhook_service.subscribe_to_events()
     app.state.webhook_service = webhook_service
+
+    try:
+        await repeater_service.startup()
+    except Exception as e:
+        logger.error("Repeater service startup failed: %s", e)
 
     logger.info("Proxy engine started on %s:%d", settings.PROXY_HOST, settings.PROXY_PORT)
 
@@ -121,11 +141,179 @@ async def lifespan(app: FastAPI):
     await session_handling_engine.stop()
     await match_replace_engine.stop_refresh_task()
     interceptor_engine.clear_paused_flows()
+    # Release MITM resources (firewall rules + any live spoofers/redirects)
+    # only now — they must persist for manual-proxy (Stealth) devices for the
+    # whole backend lifetime, not just until "Stop" is pressed.
+    from api.routes.mitm import shutdown_mitm
+    await shutdown_mitm()
     proxy_engine.stop()
     logger.info("Shutdown complete.")
 
 
 app = FastAPI(lifespan=lifespan)
+
+from core.api_auth import verify_api_key
+app.middleware("http")(verify_api_key)
+
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+
+@app.get("/api/auth/key")
+async def get_api_key(request: Request):
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="API key only available from localhost")
+    from core.api_auth import API_KEY
+    return PlainTextResponse(API_KEY)
+
+
+import qrcode
+from io import BytesIO
+from modules.ca_portal import CAPortalManager, DEFAULT_PORT
+
+_ca_portal: "CAPortalManager | None" = None
+
+
+def _ca_base_url() -> str:
+    """Base URL for the on-demand CA portal, reachable from other devices.
+
+    The main API binds to 127.0.0.1, so the QR codes point at the dedicated
+    CA portal server (bound to 0.0.0.0) instead of the API.
+    """
+    host = settings.API_HOST
+    if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0", ""):
+        from modules.arp_spoof import _get_local_ip
+        try:
+            host = _get_local_ip()
+        except Exception:
+            host = "127.0.0.1"
+    return f"http://{host}:{DEFAULT_PORT}"
+
+
+def _ensure_ca_portal() -> CAPortalManager | None:
+    """Start the CA portal server on demand (lazily, never at boot)."""
+    global _ca_portal
+    ca_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+    if not ca_path.exists():
+        return None
+    if _ca_portal is None or not _ca_portal.running:
+        mgr = CAPortalManager(cert_path=str(ca_path))
+        if mgr.start() is None:
+            return None
+        _ca_portal = mgr
+    return _ca_portal
+
+
+@app.get("/api/ca-qr")
+async def ca_qr():
+    if _ensure_ca_portal() is None:
+        return {"error": "CA certificate not found"}
+    img = qrcode.make(f"{_ca_base_url()}/")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
+CA_UNINSTALL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nyx — Remove CA Certificate</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#030712;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.card{{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:40px;max-width:560px;width:90%;margin:20px}}
+h1{{font-size:24px;font-weight:700;margin-bottom:8px}}
+.sub{{color:#94a3b8;font-size:14px;margin-bottom:24px}}
+.platform{{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:20px;margin-bottom:16px}}
+.platform h2{{font-size:16px;color:#60a5fa;margin-bottom:12px}}
+.platform ol{{padding-left:20px;line-height:1.8;font-size:14px;color:#cbd5e1}}
+.platform ol li{{margin-bottom:4px}}
+code{{background:#1e293b;padding:2px 6px;border-radius:4px;font-size:13px;color:#f472b6}}
+.note{{background:#451a03;border:1px solid #78350f;border-radius:8px;padding:12px 16px;margin-top:16px;font-size:13px;color:#fdba74}}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Remove CA Certificate</h1>
+<p class="sub">Follow the instructions for your device to remove the Nyx CA certificate.</p>
+
+<div class="platform">
+<h2>iOS / iPadOS</h2>
+<ol>
+<li>Open <strong>Settings</strong></li>
+<li>Go to <strong>General</strong> → <strong>VPN &amp; Device Management</strong></li>
+<li>Tap the Nyx CA profile</li>
+<li>Tap <strong>Remove Profile</strong> and confirm</li>
+<li>Go to <strong>General</strong> → <strong>About</strong> → <strong>Certificate Trust Settings</strong></li>
+<li>Disable the toggle for the Nyx CA</li>
+</ol>
+</div>
+
+<div class="platform">
+<h2>Android</h2>
+<ol>
+<li>Open <strong>Settings</strong></li>
+<li>Go to <strong>Security</strong> → <strong>Trusted credentials</strong> (or <strong>Encryption &amp; credentials</strong>)</li>
+<li>Tap the <strong>User</strong> tab</li>
+<li>Find and tap the Nyx CA entry</li>
+<li>Tap <strong>Remove</strong> and confirm</li>
+</ol>
+</div>
+
+<div class="platform">
+<h2>Windows</h2>
+<ol>
+<li>Press <code>Win + R</code>, type <code>certmgr.msc</code>, press Enter</li>
+<li>Expand <strong>Trusted Root Certification Authorities</strong> → <strong>Certificates</strong></li>
+<li>Find the Nyx CA, right-click → <strong>Delete</strong></li>
+</ol>
+</div>
+
+<div class="platform">
+<h2>macOS</h2>
+<ol>
+<li>Open <strong>Keychain Access</strong></li>
+<li>Select the <strong>System</strong> keychain (or <strong>Login</strong>)</li>
+<li>Find the Nyx CA certificate</li>
+<li>Right-click → <strong>Delete</strong></li>
+<li>Enter your password to confirm</li>
+</ol>
+</div>
+
+<div class="platform">
+<h2>Linux</h2>
+<ol>
+<li>Open a terminal</li>
+<li>Run: <code>sudo rm /usr/local/share/ca-certificates/nyx-ca.crt</code></li>
+<li>Run: <code>sudo update-ca-certificates --fresh</code></li>
+</ol>
+</div>
+
+<div class="note">
+The CA certificate is stored on your device. Removing it means encrypted traffic through Nyx will show security warnings again.
+</div>
+</div>
+</body>
+</html>"""
+
+
+@app.get("/api/ca-uninstall")
+async def ca_uninstall_page():
+    return HTMLResponse(content=CA_UNINSTALL_HTML)
+
+
+@app.get("/api/ca-uninstall-qr")
+async def ca_uninstall_qr():
+    if _ensure_ca_portal() is None:
+        return {"error": "CA certificate not found"}
+    url = f"{_ca_base_url()}/api/ca-uninstall"
+    img = qrcode.make(url)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 @app.exception_handler(Exception)
@@ -159,12 +347,12 @@ async def traffic_websocket(ws: WebSocket):
             while True:
                 await ws.receive_text()
         except WebSocketDisconnect:
-            ws_manager.disconnect(ws)
+            await ws_manager.disconnect(ws)
 
 
 from api.routes.sessions import router as sessions_router
 from api.routes.requests import router as requests_router
-from api.routes.repeater import router as repeater_router
+from api.routes.repeater import router as repeater_router, service as repeater_service
 from api.routes.scanner import router as scanner_router
 from api.routes.decoder import router as decoder_router
 from api.routes.match_replace import router as match_replace_router
@@ -199,15 +387,25 @@ from api.routes.dashboard import router as dashboard_router
 from api.routes.scan_policies import router as scan_policies_router
 from api.routes.settings import router as settings_router
 from api.routes.mitm import router as mitm_router, init_mitm
+from api.routes.proxy import router as proxy_router, init_proxy
 from api.routes.auth_scan import router as auth_scan_router, init_auth_scanner
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import sys
 
 from api.routes.auto_exploit import router as auto_exploit_router
 from api.routes.custom_scanner import router as custom_scanner_router
+from api.routes.recommendations import router as recommendations_router, init_recommender
+from core.recommender.engine import RecommendationEngine
 
-FRONTEND_DIST = Path(os.environ.get("NYX_FRONTEND_DIST", Path(__file__).parent.parent / "frontend" / "dist"))
+_env_frontend = os.environ.get("NYX_FRONTEND_DIST")
+if _env_frontend:
+    FRONTEND_DIST = Path(_env_frontend)
+elif getattr(sys, 'frozen', False):
+    FRONTEND_DIST = Path(sys.executable).parent.parent / "frontend"
+else:
+    FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 app.include_router(sessions_router)
 app.include_router(requests_router)
@@ -246,11 +444,14 @@ app.include_router(dashboard_router)
 app.include_router(scan_policies_router)
 app.include_router(settings_router)
 app.include_router(mitm_router)
+app.include_router(proxy_router)
 app.include_router(auth_scan_router)
 app.include_router(auto_exploit_router)
 app.include_router(custom_scanner_router)
+app.include_router(recommendations_router)
 
 init_mitm(proxy_engine)
+init_proxy(proxy_engine)
 
 
 @app.get("/health")

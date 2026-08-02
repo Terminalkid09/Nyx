@@ -36,11 +36,24 @@ class InteractionResponse(BaseModel):
     interaction_type: str
     source_ip: str
     received_at: str
-    raw_payload: str | None
+    raw_payload: str | None = None
     method: str | None = None
     url: str | None = None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_orm(cls, obj):
+        return cls(
+            id=str(obj.id),
+            token=obj.token,
+            interaction_type=str(obj.interaction_type.value) if hasattr(obj.interaction_type, 'value') else str(obj.interaction_type),
+            source_ip=obj.source_ip,
+            received_at=obj.received_at.isoformat() if obj.received_at else "",
+            raw_payload=obj.raw_payload,
+            method=obj.method,
+            url=obj.url,
+        )
 
 
 def _broadcast_collaborator_hit(request: Request, token: str, interaction_type: str, source_ip: str):
@@ -152,7 +165,7 @@ async def list_interactions(
     if filters:
         stmt = stmt.where(and_(*filters))
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return [InteractionResponse.from_orm(row) for row in result.scalars().all()]
 
 
 @router.get("/health")

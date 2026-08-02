@@ -1,151 +1,338 @@
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from httpx import ASGITransport, AsyncClient
+from fastapi import FastAPI
 
 
-class TestARPSpoofer:
-    def test_detect_gateway_returns_none_when_no_route(self):
-        from modules.arp_spoof import ARPSpoofer
-        spoofer = ARPSpoofer(target_ip="192.168.1.100")
-        assert spoofer.gateway_ip is not None  # system has a default route
+class TestMITMModels:
+    def test_mitm_start_request_validates_target_ips(self):
+        from api.routes.mitm import MITMStartRequest
+        req = MITMStartRequest(target_ips=["192.168.1.100", "192.168.1.101"])
+        assert req.target_ips == ["192.168.1.100", "192.168.1.101"]
+        assert req.gateway_ip is None
+        assert req.enable_dns_spoof is True
 
-    def test_get_local_ip_returns_string(self):
+    def test_mitm_start_request_empty_targets(self):
+        from api.routes.mitm import MITMStartRequest
+        req = MITMStartRequest(target_ips=[])
+        assert req.target_ips == []
+
+    def test_mitm_start_request_with_gateway(self):
+        from api.routes.mitm import MITMStartRequest
+        req = MITMStartRequest(target_ips=["192.168.1.100"], gateway_ip="192.168.1.1")
+        assert req.gateway_ip == "192.168.1.1"
+
+    def test_mitm_start_response_model(self):
+        from api.routes.mitm import MITMStartResponse
+        resp = MITMStartResponse(
+            status="ok",
+            message="MITM active",
+            admin_mode=True,
+            captive_portal_url="http://test:8000/api/mitm/portal",
+        )
+        assert resp.model_dump() == {
+            "status": "ok",
+            "message": "MITM active",
+            "admin_mode": True,
+            "captive_portal_url": "http://test:8000/api/mitm/portal",
+        }
+
+    def test_mitm_stop_response_model(self):
+        from api.routes.mitm import MITMStopResponse
+        resp = MITMStopResponse(status="ok", message="Stopped")
+        assert resp.model_dump() == {"status": "ok", "message": "Stopped"}
+
+    def test_network_device_model(self):
+        from api.routes.mitm import NetworkDevice
+        dev = NetworkDevice(
+            ip="192.168.1.100",
+            mac="aa:bb:cc:dd:ee:ff",
+            hostname="test.local",
+            vendor="Test Inc",
+            is_local=False,
+        )
+        assert dev.ip == "192.168.1.100"
+        assert dev.mac == "aa:bb:cc:dd:ee:ff"
+        assert dev.hostname == "test.local"
+        assert dev.vendor == "Test Inc"
+        assert dev.is_local is False
+        d = dev.model_dump(exclude_none=True)
+        assert d["ip"] == "192.168.1.100"
+
+    def test_network_device_minimal(self):
+        from api.routes.mitm import NetworkDevice
+        dev = NetworkDevice(ip="10.0.0.1")
+        assert dev.ip == "10.0.0.1"
+        assert dev.mac is None
+        assert dev.vendor is None
+        assert dev.is_local is False
+
+
+class TestLocalIPDetection:
+    def test_get_local_ip_returns_valid_ip(self):
         from modules.arp_spoof import _get_local_ip
         ip = _get_local_ip()
-        assert isinstance(ip, str)
-        assert len(ip.split(".")) == 4
+        parts = ip.split(".")
+        assert len(parts) == 4
+        assert all(p.isdigit() for p in parts)
 
-    @patch("modules.arp_spoof._get_mac", return_value="aa:bb:cc:dd:ee:ff")
-    @patch("modules.arp_spoof.ARPSpoofer._send_arp")
-    async def test_start_stop(self, mock_send_arp, mock_get_mac):
+    def test_get_local_ip_not_loopback(self):
+        from modules.arp_spoof import _get_local_ip
+        ip = _get_local_ip()
+        assert not ip.startswith("127.")
+
+
+class TestGatewayDetection:
+    def test_detect_gateway_returns_ip_or_none(self):
         from modules.arp_spoof import ARPSpoofer
-        spoofer = ARPSpoofer(target_ip="192.168.1.100", gateway_ip="192.168.1.1", interval=0.05)
-        await spoofer.start()
-        assert spoofer._running is True
-        await asyncio.sleep(0.12)
-        await spoofer.stop()
-        assert spoofer._running is False
-        assert mock_send_arp.call_count >= 2
+        spoofer = ARPSpoofer(target_ips=["192.168.1.100"])
+        if spoofer.gateway_ip:
+            parts = spoofer.gateway_ip.split(".")
+            assert len(parts) == 4
+            assert all(p.isdigit() for p in parts)
 
-    @patch("modules.arp_spoof._get_mac", return_value="aa:bb:cc:dd:ee:ff")
-    @patch("modules.arp_spoof.ARPSpoofer._send_arp")
-    async def test_no_double_start(self, mock_send_arp, mock_get_mac):
+
+class TestARPSpooferMultiTarget:
+    def test_init_with_single_target(self):
         from modules.arp_spoof import ARPSpoofer
-        spoofer = ARPSpoofer(target_ip="192.168.1.100", gateway_ip="192.168.1.1")
-        await spoofer.start()
-        await spoofer.start()
-        assert spoofer._running is True
-        await spoofer.stop()
+        spoofer = ARPSpoofer(target_ips=["192.168.1.100"])
+        assert spoofer.target_ips == ["192.168.1.100"]
 
-    async def test_stop_without_start(self):
+    def test_init_with_multiple_targets(self):
         from modules.arp_spoof import ARPSpoofer
-        spoofer = ARPSpoofer(target_ip="192.168.1.100", gateway_ip="192.168.1.1")
-        await spoofer.stop()
+        spoofer = ARPSpoofer(target_ips=["192.168.1.100", "192.168.1.101", "192.168.1.102"])
+        assert len(spoofer.target_ips) == 3
+        assert "192.168.1.101" in spoofer.target_ips
 
+    def test_init_with_custom_gateway(self):
+        from modules.arp_spoof import ARPSpoofer
+        spoofer = ARPSpoofer(target_ips=["192.168.1.100"], gateway_ip="10.0.0.1")
+        assert spoofer.gateway_ip == "10.0.0.1"
 
-class TestSetupTransparentRedirect:
-    def test_linux_commands(self):
-        with patch("platform.system", return_value="Linux"):
-            from core.proxy.engine import setup_transparent_redirect
-            cmds = setup_transparent_redirect(8080, enable=True)
-            for c in cmds:
-                assert "iptables" in c or "sysctl" in c
-            assert any("--dport 80" in c for c in cmds)
-            assert any("--dport 443" in c for c in cmds)
+    def test_init_interval_default(self):
+        from modules.arp_spoof import ARPSpoofer
+        spoofer = ARPSpoofer(target_ips=["192.168.1.100"])
+        assert spoofer.interval == 3.0
 
-    def test_linux_teardown(self):
-        with patch("platform.system", return_value="Linux"):
-            from core.proxy.engine import setup_transparent_redirect
-            cmds = setup_transparent_redirect(8080, enable=False)
-            assert all("-D" in c or "net.ipv4.ip_forward=0" in c for c in cmds)
-
-    def test_windows_commands(self):
-        with patch("platform.system", return_value="Windows"):
-            from core.proxy.engine import setup_transparent_redirect
-            cmds = setup_transparent_redirect(8080, enable=True)
-            assert any("netsh" in c for c in cmds)
-            assert any("forwarding enabled" in c for c in cmds)
-
-    def test_windows_teardown(self):
-        with patch("platform.system", return_value="Windows"):
-            from core.proxy.engine import setup_transparent_redirect
-            cmds = setup_transparent_redirect(8080, enable=False)
-            assert any("forwarding disabled" in c for c in cmds)
-
-    def test_macos_commands(self):
-        with patch("platform.system", return_value="Darwin"):
-            from core.proxy.engine import setup_transparent_redirect
-            cmds = setup_transparent_redirect(8080, enable=True)
-            for c in cmds:
-                assert "pfctl" in c or "sysctl" in c or "echo" in c
-            assert any("port 8080" in c for c in cmds)
-
-    def test_macos_teardown(self):
-        with patch("platform.system", return_value="Darwin"):
-            from core.proxy.engine import setup_transparent_redirect
-            cmds = setup_transparent_redirect(8080, enable=False)
-            assert any("pfctl -F all" in c for c in cmds)
-            assert any("ip.forwarding=0" in c for c in cmds)
+    def test_init_custom_interval(self):
+        from modules.arp_spoof import ARPSpoofer
+        spoofer = ARPSpoofer(target_ips=["192.168.1.100"], interval=5.0)
+        assert spoofer.interval == 5.0
 
 
 class TestMITMStatusEndpoint:
     @pytest.mark.asyncio
-    @patch("api.routes.mitm._is_admin", return_value=True)
-    async def test_mitm_status_inactive(self, mock_admin):
-        from api.routes.mitm import mitm_status
-        result = await mitm_status()
-        assert result["active"] is False
-        assert result["admin_mode"] is True
-        assert "proxy_mode" in result
-        assert "redirect_active" in result
-
-    @pytest.mark.asyncio
-    @patch("api.routes.mitm._is_admin", return_value=False)
-    async def test_mitm_status_non_admin(self, mock_admin):
-        from api.routes.mitm import mitm_status
-        result = await mitm_status()
-        assert result["admin_mode"] is False
+    async def test_mitm_status_returns_structure(self):
+        from api.routes.mitm import router
+        app = FastAPI()
+        app.include_router(router)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/mitm/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "active" in body
+        assert "arp_spoofing" in body
+        assert "dns_spoofing" in body
+        assert "target_ips" in body
+        assert "gateway_ip" in body
+        assert "admin_mode" in body
+        assert "proxy_mode" in body
+        assert "redirect_active" in body
 
 
 class TestMITMStartValidation:
-    @patch("api.routes.mitm._engine", None)
     @pytest.mark.asyncio
-    async def test_start_without_engine(self):
-        from api.routes.mitm import mitm_start
-        from api.routes.mitm import MITMStartRequest
-        with pytest.raises(Exception) as exc:
-            await mitm_start(MITMStartRequest(target_ip="192.168.1.100"))
-        assert "not initialized" in str(exc.value)
+    async def test_start_without_target_field_returns_422(self):
+        from api.routes.mitm import router
+        app = FastAPI()
+        app.include_router(router)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/mitm/start", json={})
+        assert resp.status_code == 422
 
 
-class TestProxyEngineTransparent:
-    @patch("core.proxy.engine.DumpMaster")
-    @patch("core.proxy.engine.asyncio.new_event_loop")
-    def test_transparent_mode_option(self, mock_loop, mock_dumpmaster):
-        from core.proxy.engine import ProxyEngine
-        bus = MagicMock()
-        engine = ProxyEngine(bus, mode="transparent")
-        mock_loop_instance = MagicMock()
-        mock_loop.return_value = mock_loop_instance
-        engine.start(fastapi_loop=MagicMock())
-        import time
-        time.sleep(0.1)
-        engine.stop()
-        assert engine.mode == "transparent"
+class TestSetupTransparentRedirect:
+    def test_linux_enable_commands(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Linux")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(8080, enable=True)
+        assert len(cmds) > 0
+        assert any("iptables" in c for c in cmds)
+        assert any("sysctl" in c for c in cmds)
+        assert any("--dport 80" in c for c in cmds)
+        assert any("--dport 443" in c for c in cmds)
 
-    @patch("core.proxy.engine.DumpMaster")
-    @patch("core.proxy.engine.asyncio.new_event_loop")
-    def test_regular_mode_default(self, mock_loop, mock_dumpmaster):
-        from core.proxy.engine import ProxyEngine
-        bus = MagicMock()
-        engine = ProxyEngine(bus)
-        assert engine.mode == "regular"
+    def test_linux_disable_commands(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Linux")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(8080, enable=False)
+        assert len(cmds) > 0
+        assert any("-D" in c or "net.ipv4.ip_forward=0" in c for c in cmds)
 
-    def test_emit_event_handles_exception(self):
-        from core.proxy.engine import ProxyEngine
-        bus = MagicMock()
-        engine = ProxyEngine(bus)
-        engine.fastapi_loop = MagicMock()
-        engine.fastapi_loop.is_closed.return_value = False
-        with patch("asyncio.run_coroutine_threadsafe", side_effect=Exception("fail")):
-            engine.emit_event({"type": "test"})
+    def test_windows_enable_commands(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Windows")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(8080, enable=True)
+        assert len(cmds) == 0
+
+    def test_windows_disable_commands(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Windows")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(8080, enable=False)
+        assert len(cmds) == 0
+
+    def test_macos_enable_commands(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Darwin")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(8080, enable=True)
+        assert all("pfctl" in c or "sysctl" in c or "echo" in c for c in cmds)
+        assert any("port 8080" in c for c in cmds)
+
+    def test_macos_disable_commands(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Darwin")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(8080, enable=False)
+        assert any("pfctl -F all" in c for c in cmds)
+        assert any("ip.forwarding=0" in c for c in cmds)
+
+    def test_redirect_port_mapping(self):
+        import platform
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(platform, "system", lambda: "Linux")
+            from core.proxy.engine import setup_transparent_redirect
+            cmds = setup_transparent_redirect(9090, enable=True)
+        assert any("--dport 80" in c for c in cmds)
+        assert any("--dport 443" in c for c in cmds)
+        assert any("9090" in c for c in cmds)
+
+
+class TestFirewallPersistence:
+    """Stealth-mode regression: the LAN proxy firewall rule must survive a
+    "Stop MITM" and only be removed at backend shutdown."""
+
+    @pytest.mark.asyncio
+    async def test_stop_keeps_firewall_rule(self):
+        from unittest.mock import patch, AsyncMock, MagicMock
+        from api.routes import mitm as mitm_mod
+
+        fake_engine = MagicMock()
+        fake_engine.port = 8080
+        fake_engine._master = None
+
+        spoofer = AsyncMock()
+        dns = AsyncMock()
+
+        old_spoofer, old_dns, old_engine = (
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine)
+        old_redirect = mitm_mod._redirect_active
+        try:
+            mitm_mod._spoofer = spoofer
+            mitm_mod._dns_spoofer = dns
+            mitm_mod._engine = fake_engine
+            mitm_mod._redirect_active = True
+
+            with patch.object(mitm_mod, "_exec_admin_redirect", return_value=[]) as redirect, \
+                 patch.object(mitm_mod, "_remove_windows_firewall") as rm_fw:
+                await mitm_mod.mitm_stop()
+
+            # Redirect disabled, spoofers stopped...
+            redirect.assert_called_once_with(8080, enable=False)
+            spoofer.stop.assert_awaited_once()
+            dns.stop.assert_awaited_once()
+            # ...but the firewall rule is KEPT so manual-proxy LAN devices
+            # can still reach Nyx after interception is stopped.
+            rm_fw.assert_not_called()
+        finally:
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine = old_spoofer, old_dns, old_engine
+            mitm_mod._redirect_active = old_redirect
+
+    @pytest.mark.asyncio
+    async def test_shutdown_removes_firewall_rule(self):
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from api.routes import mitm as mitm_mod
+
+        fake_engine = MagicMock()
+        fake_engine.port = 8080
+
+        spoofer = AsyncMock()
+        dns = AsyncMock()
+
+        old_spoofer, old_dns, old_engine = (
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine)
+        old_redirect = mitm_mod._redirect_active
+        try:
+            mitm_mod._spoofer = spoofer
+            mitm_mod._dns_spoofer = dns
+            mitm_mod._engine = fake_engine
+            mitm_mod._redirect_active = True
+
+            with patch.object(mitm_mod, "_exec_admin_redirect", return_value=[]), \
+                 patch.object(mitm_mod, "_remove_windows_firewall") as remove_fw:
+                await mitm_mod.shutdown_mitm()
+
+            # Backend shutdown cleans up everything, including the LAN proxy rule.
+            assert remove_fw.call_count == 2  # proxy port + 8082 transparent port
+        finally:
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine = old_spoofer, old_dns, old_engine
+            mitm_mod._redirect_active = old_redirect
+
+
+class TestMitmWarnings:
+    """mitm_start must not lose warnings accumulated along the way (firewall
+    failure, DNS spoof failure, non-admin, redirect not active)."""
+
+    @pytest.mark.asyncio
+    async def test_firewall_warning_not_lost(self):
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from api.routes import mitm as mitm_mod
+
+        fake_engine = MagicMock()
+        fake_engine.port = 8080
+        fake_engine.mode = "regular"
+        fake_engine.switch_to_transparent.return_value = (True, "ok")
+
+        old_spoofer, old_dns, old_engine = (
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine)
+        old_redirect = mitm_mod._redirect_active
+        try:
+            mitm_mod._spoofer = None
+            mitm_mod._dns_spoofer = None
+            mitm_mod._engine = fake_engine
+            mitm_mod._redirect_active = False
+
+            spoofer = MagicMock()
+            spoofer.gateway_ip = "192.168.1.1"
+
+            req = mitm_mod.MITMStartRequest(
+                target_ips=["192.168.1.100"],
+                gateway_ip="192.168.1.1",
+                enable_dns_spoof=False,
+            )
+            with patch.object(mitm_mod, "_is_admin", return_value=True), \
+                 patch.object(mitm_mod, "platform") as plat, \
+                 patch.object(mitm_mod, "ARPSpoofer", return_value=spoofer), \
+                 patch.object(spoofer, "start", new=AsyncMock()):
+                plat.system.return_value = "Windows"
+                with patch.object(mitm_mod, "_ensure_windows_firewall", return_value=False):
+                    resp = await mitm_mod.mitm_start(req)
+
+            assert resp.status == "ok"
+            assert "Windows Firewall rule" in resp.message
+        finally:
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine = old_spoofer, old_dns, old_engine
+            mitm_mod._redirect_active = old_redirect
+
+

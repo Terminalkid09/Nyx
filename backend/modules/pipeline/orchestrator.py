@@ -173,14 +173,20 @@ class ScanPipeline:
 
             if extracted_params and all_urls:
                 fuzz_config = config.get("fuzz", {})
-                fuzz_attack_type = fuzz_config.get("attack_type", "sniper")
-
                 pipeline["results"]["fuzz"] = {
                     "params_available": list(extracted_params.keys()),
-                    "attack_type": fuzz_attack_type,
+                    "attack_type": fuzz_config.get("attack_type", "sniper"),
                     "recommended_url": target_url,
-                    "note": "Fuzz job available in Fuzzer UI with pre-populated params",
+                    "note": "Fuzz parameters ready — open Fuzzer UI to run with pre-populated params",
                 }
+                await self.event_bus.publish({
+                    "type": "pipeline.fuzz_ready",
+                    "pipeline_id": pipeline_id,
+                    "target_url": target_url,
+                    "params": list(extracted_params.keys()),
+                })
+            else:
+                pipeline["results"]["fuzz"] = {"params_available": [], "note": "No parameters to fuzz"}
 
             pipeline["steps"]["fuzz"]["status"] = "completed"
             pipeline["steps"]["fuzz"]["progress"] = 100

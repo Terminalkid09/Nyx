@@ -4,9 +4,16 @@ logger = logging.getLogger(__name__)
 
 
 class AutoReportService:
-    """Thin wrapper around ReporterService for backwards compatibility."""
+    """Thin wrapper around ReporterService for backwards compatibility.
 
-    async def generate_report(self, session_id: str | None = None, scan_name: str = "Nyx Scan Report") -> dict:
+    ``session_id`` is *required* — reports are always scoped to one session.
+    Passing ``None`` previously merged data from all sessions into a single
+    report without the caller being aware, mixing unrelated sessions.
+    """
+
+    async def generate_report(self, session_id: str, scan_name: str = "Nyx Scan Report") -> dict:
+        if not session_id:
+            raise ValueError("session_id is required for a report generation")
         from reporter.service import ReporterService
         svc = ReporterService()
         report_bytes = await svc.generate_from_db(session_id=session_id, format="json")
@@ -25,7 +32,9 @@ class AutoReportService:
         }
         return report
 
-    async def save_report(self, session_id: str | None = None, scan_name: str = "Nyx Scan Report") -> dict:
+    async def save_report(self, session_id: str, scan_name: str = "Nyx Scan Report") -> dict:
+        if not session_id:
+            raise ValueError("session_id is required for a report save")
         from reporter.service import ReporterService
         svc = ReporterService()
         return await svc.save_report(session_id=session_id, scan_name=scan_name)

@@ -9,7 +9,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SELF_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
+SELF_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+NOISE_DOMAINS = {
+    "api.github.com", "github.com", "githubusercontent.com",
+    "ocsp.int-x3.letsencrypt.org", "ocsp.digicert.com",
+    "ctldl.windowsupdate.com", "download.windowsupdate.com",
+    "www.msftconnecttest.com", "ipv6.msftconnecttest.com",
+    "msftncsi.com", "www.msftncsi.com",
+    "crl.microsoft.com", "crl3.digicert.com", "crl4.digicert.com",
+}
+
+NOISE_PATHS = {
+    "/success.txt", "/connecttest.txt", "/ncsi.txt", "/generate_204",
+}
+
+_MAX_HEX_BYTES = 50 * 1024  # cap hex output to ~100KB chars
 
 
 class LoggerAddon:
@@ -27,8 +42,21 @@ class LoggerAddon:
             return True
         return False
 
+    def _is_noise(self, flow: http.HTTPFlow) -> bool:
+        host = flow.request.pretty_host.lower()
+        if any(noise in host for noise in NOISE_DOMAINS):
+            return True
+        for p in NOISE_PATHS:
+            if flow.request.path.rstrip("/") == p or flow.request.path.startswith(p + "?"):
+                return True
+        return False
+
     def request(self, flow: http.HTTPFlow):
         if self._is_self_traffic(flow):
+            return
+        if self._is_noise(flow):
+            return
+        if not self.engine.capture_active:
             return
         self._request_start_times[id(flow)] = time.monotonic()
         request_id = uuid.uuid4()
@@ -77,6 +105,7 @@ class LoggerAddon:
             "request_id": request_id,
             "session_id": flow.metadata.get("nyx_session_id"),
             "status": flow.response.status_code,
+            "reason": flow.response.reason,
             "headers": dict(flow.response.headers),
             "body": body,
             "content_type": flow.response.headers.get("content-type"),
@@ -100,8 +129,8 @@ class LoggerAddon:
             "application/json", "application/xml", "application/xhtml+xml",
             "application/javascript", "application/ld+json", "application/graphql",
         ):
-            return content.hex()
+            return content[:_MAX_HEX_BYTES].hex()
         try:
             return content.decode("utf-8", errors="replace")
         except Exception:
-            return content.hex()
+            return content[:_MAX_HEX_BYTES].hex()

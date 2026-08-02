@@ -1,8 +1,24 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select, desc, update
+from sqlalchemy import select, desc, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from core.storage.models import Session
+from core.storage.models import (
+    Session,
+    Request,
+    Finding,
+    MatchReplaceRule,
+    FuzzJob,
+    InterceptorRule,
+    SessionHandlingRule,
+    CookieJar,
+    ComparerItem,
+    WebSocketMessage,
+    ScanJob,
+    ContentDiscoveryJob,
+    OrganizerItem,
+    TargetScopeRule,
+    ClickbanditConfig,
+)
 
 
 async def create_session(db: AsyncSession, name: str, scope: list | None = None) -> Session:
@@ -45,5 +61,34 @@ async def delete_session(db: AsyncSession, session_id: uuid.UUID) -> bool:
     if not session:
         return False
     await db.delete(session)
+    await db.commit()
+    return True
+
+
+SESSION_DATA_MODELS = [
+    Request,          # cascades InterceptedItem via request_id
+    Finding,          # cascades CollaboratorInteraction finding_id (SET NULL)
+    FuzzJob,
+    ScanJob,
+    ContentDiscoveryJob,
+    MatchReplaceRule,
+    InterceptorRule,
+    SessionHandlingRule,
+    CookieJar,
+    ComparerItem,
+    WebSocketMessage,
+    OrganizerItem,
+    TargetScopeRule,
+    ClickbanditConfig,
+]
+
+
+async def reset_session_data(db: AsyncSession, session_id: uuid.UUID) -> bool:
+    """Delete all per-session data (findings, requests, scans, rules...) for a session."""
+    session = await get_session(db, session_id)
+    if not session:
+        return False
+    for model in SESSION_DATA_MODELS:
+        await db.execute(delete(model).where(model.session_id == session_id))
     await db.commit()
     return True

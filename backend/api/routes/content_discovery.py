@@ -8,6 +8,7 @@ from sqlalchemy import select
 from api.deps import get_db
 from core.storage.models import ContentDiscoveryJob
 from core.storage.database import AsyncSessionLocal
+from core.storage.traffic import DEFAULT_SESSION_ID
 from core.events.bus import EventBus
 from modules.content_discovery.service import ContentDiscoveryService
 from pydantic import BaseModel
@@ -110,7 +111,12 @@ async def _run_discovery_in_background(
 
 @router.post("/start", response_model=StartDiscoveryResponse, status_code=201)
 async def start_discovery(body: StartDiscoveryRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    try:
+        session_uuid = uuid.UUID(body.session_id) if body.session_id else DEFAULT_SESSION_ID
+    except ValueError:
+        session_uuid = DEFAULT_SESSION_ID
     job = ContentDiscoveryJob(
+        session_id=session_uuid,
         target_url=body.target_url,
         status="pending",
         wordlist_path=body.wordlist_path,

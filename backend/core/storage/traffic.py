@@ -1,5 +1,6 @@
 """Persist proxy events as durable request history."""
 import uuid
+from sqlalchemy.exc import IntegrityError
 
 from core.events.bus import EventBus
 from core.storage.database import AsyncSessionLocal
@@ -22,7 +23,7 @@ class TrafficStorageService:
     def _body(self, value):
         if value is None:
             return None, False
-        return value[:self.max_body_size], len(value.encode("utf-8", errors="replace")) > self.max_body_size
+        return value[:self.max_body_size], len(value) > self.max_body_size
 
     @staticmethod
     def _uuid(value, fallback):
@@ -37,10 +38,14 @@ class TrafficStorageService:
             return
         body, truncated = self._body(event.get("request_body"))
         async with AsyncSessionLocal() as db:
-            if await db.get(Request, request_id):
+            existing = await db.get(Request, request_id)
+            if existing:
                 return
-            db.add(Request(id=request_id, session_id=self._uuid(event.get("session_id"), DEFAULT_SESSION_ID), method=event.get("method", "GET")[:16], url=event.get("url", ""), host=event.get("host", "")[:512], path=event.get("path", ""), request_headers=event.get("request_headers") or {}, request_body=body, is_body_truncated=truncated))
-            await db.commit()
+            try:
+                db.add(Request(id=request_id, session_id=self._uuid(event.get("session_id"), DEFAULT_SESSION_ID), method=event.get("method", "GET")[:16], url=event.get("url", ""), host=event.get("host", "")[:512], path=event.get("path", ""), request_headers=event.get("request_headers") or {}, request_body=body, is_body_truncated=truncated))
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
 
     async def _on_response(self, event: dict):
         request_id = self._uuid(event.get("request_id"), None)
@@ -50,8 +55,16 @@ class TrafficStorageService:
         async with AsyncSessionLocal() as db:
             request = await db.get(Request, request_id)
             if not request:
-                request = Request(id=request_id, session_id=self._uuid(event.get("session_id"), DEFAULT_SESSION_ID), method=event.get("method", "GET")[:16], url=event.get("url", ""), host=event.get("host", "")[:512], path=event.get("path", ""), request_headers=event.get("request_headers") or {}, request_body=event.get("request_body"))
-                db.add(request)
+                try:
+                    request = Request(id=request_id, session_id=self._uuid(event.get("session_id"), DEFAULT_SESSION_ID), method=event.get("method", "GET")[:16], url=event.get("url", ""), host=event.get("host", "")[:512], path=event.get("path", ""), request_headers=event.get("request_headers") or {}, request_body=event.get("request_body"))
+                    db.add(request)
+                    await db.commit()
+                    await db.refresh(request)
+                except IntegrityError:
+                    await db.rollback()
+                    request = await db.get(Request, request_id)
+                    if not request:
+                        return
             request.response_status = event.get("status")
             request.response_headers = event.get("headers") or {}
             request.response_body = body
