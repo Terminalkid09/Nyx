@@ -1,10 +1,13 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+﻿const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
+
+const PID_FILE = path.join(os.tmpdir(), 'nyx-backend.pid');
+const COLLAB_PID_FILE = path.join(os.tmpdir(), 'nyx-collaborator.pid');
 
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -64,27 +67,69 @@ function killProcessTree(pid) {
   }
 }
 
-function killOrphanBackends() {
-  if (process.platform === 'win32') {
-    try {
-      require('child_process').execSync('taskkill /IM nyx-backend.exe /F', { stdio: 'ignore', timeout: 3000 });
-    } catch {}
-    try {
-      require('child_process').execSync('taskkill /IM nyx-collaborator.exe /F', { stdio: 'ignore', timeout: 3000 });
-    } catch {}
-  }
+function getPidsOnPorts(ports) {
+  const { execSync } = require('child_process');
+  const platform = process.platform;
+  const pids = new Set();
+  try {
+    if (platform === 'win32') {
+      const out = execSync(`netstat -ano | findstr "${ports.map(p => `:${p}`).join(' ')}"`, { timeout: 3000, encoding: 'utf8' });
+      out.split('\n').forEach(line => {
+        const m = line.match(/(\d+)\s*$/);
+        if (m) pids.add(parseInt(m[1], 10));
+      });
+    } else if (platform === 'darwin') {
+      const out = execSync(`lsof -i :${ports.join(' -i :')} -P -t 2>/dev/null`, { timeout: 3000, encoding: 'utf8' });
+      out.trim().split('\n').forEach(pid => { if (pid) pids.add(parseInt(pid, 10)); });
+    } else {
+      // Linux
+      let out = '';
+      try { out = execSync(`ss -tlnp ${ports.map(p => `sport = :${p}`).join(' or ')} 2>/dev/null`, { timeout: 3000, encoding: 'utf8' }); } catch {}
+      if (!out) {
+        try { out = execSync(`netstat -tlnp 2>/dev/null`, { timeout: 3000, encoding: 'utf8' }); } catch {}
+      }
+      out.split('\n').forEach(line => {
+        const m = line.match(/pid=(\d+)/);
+        if (m) pids.add(parseInt(m[1], 10));
+      });
+    }
+  } catch {}
+  return [...pids];
 }
+
+function killOrphanBackends() {
+  // Kill by PID file
+  [PID_FILE, COLLAB_PID_FILE].forEach((f) => {
+    try {
+      const oldPid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
+      if (!isNaN(oldPid)) {
+        killProcessTree(oldPid);
+        try { fs.unlinkSync(f); } catch {}
+      }
+    } catch {}
+  });
+  // Kill any process holding Nyx ports (8000, 8080, 8082)
+  getPidsOnPorts([8000, 8080, 8082]).forEach(pid => {
+    try { killProcessTree(pid); } catch {}
+  });
+}
+
+let backendLogStream = null;
 
 function startBackend() {
   const backendDir = getBackendDir();
   const execPath = getBackendExec();
   const execArgs = getBackendArgs();
   const frontendDist = getFrontendDir();
+  const logPath = path.join(os.tmpdir(), 'nyx-backend.log');
+  const nyxHome = path.join(app.getPath('userData'), 'data');
+  try { fs.mkdirSync(nyxHome, { recursive: true }); } catch {}
 
   const env = {
     ...process.env,
-    DATABASE_URL: process.env.DATABASE_URL || 'sqlite+aiosqlite:///nyx.db',
+    DATABASE_URL: process.env.DATABASE_URL || `sqlite+aiosqlite:///${path.join(nyxHome, 'nyx.db').replace(/\\/g, '/')}`,
     SECRET_KEY: process.env.SECRET_KEY || require('crypto').randomBytes(32).toString('hex'),
+    NYX_HOME: nyxHome,
   };
   if (app.isPackaged && fs.existsSync(frontendDist)) {
     env.NYX_FRONTEND_DIST = frontendDist;
@@ -96,23 +141,37 @@ function startBackend() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  backendProcess.stdout.on('data', (d) => process.stdout.write(`[backend] ${d}`));
-  backendProcess.stderr.on('data', (d) => process.stderr.write(`[backend] ${d}`));
+  try { backendLogStream = fs.createWriteStream(logPath, { flags: 'w' }); } catch {}
+  const log = (d) => {
+    process.stdout.write(`[backend] ${d}`);
+    if (backendLogStream) backendLogStream.write(`${d}`);
+  };
+  const logErr = (d) => {
+    process.stderr.write(`[backend] ${d}`);
+    if (backendLogStream) backendLogStream.write(`${d}`);
+  };
+  let lastStderr = '';
+  backendProcess.stdout.on('data', log);
+  backendProcess.stderr.on('data', (d) => { lastStderr = d.toString(); logErr(d); });
   backendProcess.on('error', (err) => {
     console.error('Backend spawn error:', err);
   });
   backendProcess.on('exit', (code, signal) => {
     console.log(`Backend exited code=${code} signal=${signal}`);
+    if (backendLogStream) { try { backendLogStream.end(); } catch {} backendLogStream = null; }
     if (code !== 0 && code !== null && !backendProcess.killed) {
+      const detail = lastStderr.trim().slice(-200);
       dialog.showErrorBox(
         'Backend Error',
-        `Nyx backend stopped unexpectedly (code ${code}).\n\nThe application will close. Please restart Nyx.`
+        `Nyx backend stopped unexpectedly (code ${code}).\n\nLog: ${logPath}\n\nLast error:\n${detail || '(no stderr output)'}`
       ).then(() => app.quit());
     }
   });
   backendProcess.on('close', () => {
     backendProcess = null;
   });
+
+  try { fs.writeFileSync(PID_FILE, String(backendProcess.pid), 'utf8'); } catch {}
 }
 
 function stopBackend() {
@@ -125,6 +184,7 @@ function stopBackend() {
     console.error('Failed to stop backend:', e);
   }
   backendProcess = null;
+  try { fs.unlinkSync(PID_FILE); } catch {}
 }
 
 let collaboratorProcess = null;
@@ -144,14 +204,15 @@ function startCollaborator() {
     console.log('[collaborator] Executable not found at:', execPath);
     return;
   }
-  
+
   const env = {
     ...process.env,
     COLLAB_DOMAIN: 'localhost',
     COLLAB_SECRET: 'nyx-secret',
     COLLAB_HTTP_PORT: '9999',
     COLLAB_DNS_PORT: '53',
-    COLLAB_API_PORT: '9090'
+    COLLAB_API_PORT: '9090',
+    COLLAB_WEBHOOK_URL: 'http://localhost:8000/api/collaborator/interactions',
   };
 
   collaboratorProcess = spawn(execPath, [], {
@@ -165,6 +226,8 @@ function startCollaborator() {
   collaboratorProcess.on('error', (err) => console.error('Collaborator spawn error:', err));
   collaboratorProcess.on('exit', (code, signal) => console.log(`Collaborator exited code=${code} signal=${signal}`));
   collaboratorProcess.on('close', () => { collaboratorProcess = null; });
+
+  try { fs.writeFileSync(COLLAB_PID_FILE, String(collaboratorProcess.pid), 'utf8'); } catch {}
 }
 
 function stopCollaborator() {
@@ -175,6 +238,7 @@ function stopCollaborator() {
     killProcessTree(pid);
   } catch {}
   collaboratorProcess = null;
+  try { fs.unlinkSync(COLLAB_PID_FILE); } catch {}
 }
 
 function pollHealth(retries = 90) {
@@ -265,7 +329,62 @@ function createMainWindow() {
   });
 }
 
+// Only accept TLS certificates issued by the local Nyx/mitmproxy CA (the
+// proxy's MITM cert). Anything else falls through to Chromium's default
+// verification, so the browser does NOT globally trust arbitrary certs.
+function isNyxMitmCert(req) {
+  const issuer = (req.certificate && req.certificate.issuerName ? req.certificate.issuerName : '').toLowerCase();
+  return issuer.includes('mitmproxy') || issuer.includes('nyx');
+}
+
 async function launchBrowser() {
+  const PARTITION = 'persist:nyx-browser';
+  const ses = session.fromPartition(PARTITION);
+
+  ses.setCertificateVerifyProc((req, callback) => {
+    if (isNyxMitmCert(req)) {
+      callback(0);
+    } else {
+      callback(-3); // fall back to default verification
+    }
+  });
+
+  // Check if proxy capture is active
+  let useProxy = false;
+  try {
+    const resp = await new Promise((resolve, reject) => {
+      const req = http.get('http://127.0.0.1:8000/api/proxy/capture', { timeout: 3000 }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => data += chunk);
+        res.on('end', () => {
+          try { resolve(JSON.parse(data)); } catch { reject(new Error('Bad JSON')); }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(3000, () => { req.destroy(); reject(new Error('Timeout')); });
+    });
+    useProxy = resp.capture_active === true;
+  } catch (err) {
+    console.error('Failed to check proxy capture status:', err);
+  }
+
+  if (useProxy) {
+    try {
+      await ses.setProxy({
+        proxyRules: 'http=127.0.0.1:8080;https=127.0.0.1:8080',
+        proxyBypassRules: '<local>',
+      });
+    } catch (err) {
+      console.error('Failed to set proxy:', err);
+    }
+  } else {
+    try {
+      await ses.setProxy({ proxyRules: 'direct://' });
+    } catch (err) {
+      console.error('Failed to set direct proxy:', err);
+    }
+  }
+
   const browserWin = new BrowserWindow({
     width: 1280, height: 800,
     title: 'Nyx Browser',
@@ -275,24 +394,24 @@ async function launchBrowser() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
+      webviewTag: true,
     },
   });
 
-  browserWin.webContents.session.setCertificateVerifyProc((req, callback) => {
-    callback(0);
+  const browserPage = path.join(__dirname, 'browser.html');
+  browserWin.loadFile(browserPage);
+}
+
+function toggleProxyCapture(active) {
+  const postData = JSON.stringify({ active });
+  const req = http.request('http://127.0.0.1:8000/api/proxy/capture', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+    timeout: 3000,
   });
-
-  try {
-    await browserWin.webContents.session.setProxy({
-      proxyRules: 'http=127.0.0.1:8080;https=127.0.0.1:8080',
-      proxyBypassRules: '<local>',
-    });
-  } catch (err) {
-    console.error('Failed to set proxy:', err);
-  }
-
-  browserWin.loadURL('http://example.com');
+  req.write(postData);
+  req.end();
 }
 
 function downloadCA() {
@@ -329,6 +448,7 @@ app.whenReady().then(async () => {
 
   ipcMain.on('launch-browser', launchBrowser);
   ipcMain.on('download-ca', downloadCA);
+  ipcMain.on('toggle-proxy-capture', (_event, active) => toggleProxyCapture(active));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

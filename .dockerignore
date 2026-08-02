@@ -20,6 +20,9 @@ nyx.db-journal
 backend/reports/
 nyx_reports/
 desktop/dist/
+desktop/dist_old/
+desktop/dist_new/
+desktop/dist_old_bak/
 desktop/node_modules/
 desktop/backend/
 desktop/build-output/

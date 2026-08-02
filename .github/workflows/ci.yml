@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  backend:
+  backend-unit:
+    name: Backend Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,22 +18,70 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install system dependencies
+      - name: Install Python dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run unit tests
+        working-directory: .
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-0 libnss3 libnspr4 libdbus-1-3 \
-            libatk-bridge2.0-0 libcups2 libdrm2 libatk1.0-0 libxcomposite1 \
-            libxdamage1 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 \
-            libcairo2 libgdk-pixbuf2.0-0
+          python -m pytest tests/test_auth_keeper.py \
+                           tests/test_idor_check.py \
+                           tests/test_content_discovery.py \
+                           tests/test_auto_exploit.py \
+                           tests/test_recommender.py \
+                           -q --timeout=60 -x --asyncio-mode=auto \
+                           --tb=short
+        env:
+          PYTHONPATH: backend
+
+  backend-tests:
+    name: Backend Full Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
       - name: Install Python dependencies
         run: pip install -r backend/requirements.txt
 
-      - name: Run backend tests
-        working-directory: backend
-        run: python -m pytest tests/ -q --timeout=60 -x --asyncio-mode=auto
+      - name: Run full backend test suite
+        working-directory: .
+        run: python -m pytest backend/tests -q --asyncio-mode=auto --tb=short
+        env:
+          PYTHONPATH: backend
+
+  backend-syntax:
+    name: Backend Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Compile all backend modules
+        run: python -m compileall backend/ -q
+
+      - name: Check new feature modules explicitly
+        run: |
+          python -m compileall \
+            backend/modules/scanner/auth_keeper.py \
+            backend/modules/scanner/active/checks/idor.py \
+            backend/modules/content_discovery/service.py \
+            backend/modules/automations/param_chain.py \
+            -q
 
   frontend:
+    name: Frontend Build & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +106,7 @@ jobs:
         run: npm run build
 
   desktop-lint:
+    name: Desktop Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +122,6 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Lint desktop
+      - name: Verify electron-builder is available
         working-directory: desktop
-        run: npx electron-builder --help >/dev/null 2>&1 && echo "electron-builder OK"
+        run: npx electron-builder --help > /dev/null 2>&1 && echo "electron-builder OK"

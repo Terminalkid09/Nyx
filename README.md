@@ -21,6 +21,8 @@
   <img src="https://img.shields.io/badge/python-3.10-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10" />
   <img src="https://img.shields.io/badge/react-18-61dafb?style=flat-square&logo=react&logoColor=white" alt="React 18" />
   <img src="https://img.shields.io/badge/electron-43-47848f?style=flat-square&logo=electron&logoColor=white" alt="Electron 43" />
+  <img src="https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22" />
+  <img src="https://img.shields.io/badge/C++17-00599C?style=flat-square&logo=cplusplus&logoColor=white" alt="C++17" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License" />
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-brightgreen?style=flat-square" alt="Cross-platform" />
 </p>
@@ -31,37 +33,21 @@
 
 **Nyx** is an open-source, modular web security testing platform built for penetration testers and security researchers. It combines traffic interception, automated vulnerability scanning, intelligent fuzzing, auto-exploit generation with interactive PoCs, and professional report generation into a single, cohesive suite — available as a **desktop app** (no Docker or Python required), a **Docker deployment**, or a **source-based development setup**.
 
-### 🚀 Feature Comparison: Nyx vs Burp Suite Pro
+### Feature Overview
 
-| Feature | Nyx | Burp Suite Pro |
-|---------|-----|---------------|
-| **ARP Spoofing** (zero-config interception) | ✅ **Built-in** — intercept any device on the LAN | ❌ Manual proxy setup on each device |
-| **Transparent Proxy** | ✅ Native — no browser config | ❌ Forward proxy only |
-| **Interception Rules Engine** | ✅ Match by header/body/URL/regex, scope per request/response | ⚠️ Basic on/off toggle only |
-| **Match & Replace (auto-rewrite)** | ✅ Real-time regex rewriting in proxy | ❌ Requires extension |
-| **Passive Scanner Checks** | ✅ **210+** real-time vulnerability checks | ✅ ~200 |
-| **Custom Scanner Checks** | ✅ User-defined regex checks with inline test runner | ❌ Not available |
-| **Active Scanner Checks** | ✅ **110+** including SQLi, XSS, SSRF, SSTI, XXE, IDOR | ✅ More mature but proprietary |
-| **Auto-Exploit PoC Generator** | ✅ 21+ CWE types with interactive HTML | ❌ Not available |
-| **Automation Engine** | ✅ Scheduled scans, webhooks, auto-reports | ⚠️ Manual scan only |
-| **Fuzzer multi-mode** | ✅ Sniper, Pitchfork, Cluster Bomb, parameter discovery | ✅ Intruder |
-| **Repeater (request replay)** | ✅ Full header/body control, request history, tab management | ✅ More mature |
-| **Comparer** | ✅ Side-by-side diff with proxy integration | ✅ Side-by-side diff |
-| **Sequencer** | ✅ Token entropy analysis (chi-squared, compression) | ✅ Token analysis |
-| **Decoder** | ✅ 15 codecs: Base64, JWT, URL, hex, hashes, Gzip | ✅ 15+ codecs |
-| **Session Handling** | ✅ Macro-based with cookie jar | ✅ Session handling rules |
-| **Crawler** | ✅ Playwright headless JS-aware | ✅ (slower) |
-| **WebSocket Support** | ✅ Intercept, inspect, replay WebSocket frames | ❌ Not supported |
-| **MITM Network Attack** | ✅ ARP spoofing + DNS spoofing + captive portal | ❌ Not supported |
-| **Dashboard** | ✅ Real-time trends, findings, traffic stats | ⚠️ Basic dashboard |
-| **Price** | **💰 Free (MIT)** | 💸 **$449/year** |
-| **Test Coverage** | ✅ **455+ automated tests** (CI-verified) | ❌ Proprietary |
-| **Platforms** | 🖥️ Windows/macOS/Linux | 🖥️ Windows/macOS/Linux |
-| **Admin required** | ⚠️ ARP spoofing only | ❌ Never |
+| Area | Capabilities |
+|------|-------------|
+| **Traffic interception** | ARP spoofing (zero-config LAN MITM), transparent proxy, regular forward proxy, WebSocket capture |
+| **Vulnerability scanning** | 210+ passive checks, 110+ active probes, custom regex checks, content discovery, JS-aware crawler |
+| **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
+| **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
+| **OAST** | Self-hosted Collaborator server (Go) for blind XXE/SSRF/DNS exfiltration detection |
+| **Advanced MITM** | ARP scan + multi-target selection + DNS spoofing + captive portal + gRPC parsing (native C++ module) |
+| **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
+| **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
+| **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
 
-> **The killer feature:** Nyx can intercept traffic from any device on the same WiFi network **with zero configuration** — one click. Burp requires you to manually set up a proxy on every browser or device.
-
-Nyx is designed to be a modern, extensible alternative to commercial tools like Burp Suite Professional, with 320+ security checks, context-aware auto-exploit payloads (21+ CWE types), a CyberChef-style Decoder pipeline, a full Macro Login editor with Regex extraction, and enterprise-grade automation included out of the box — all in version **1.0.0**.
+Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
 
 ---
 
@@ -81,18 +67,23 @@ Nyx is designed to be a modern, extensible alternative to commercial tools like 
 |--------|-------------|
 | **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities |
 | **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more |
+| **Smart IDOR Check** | JSON-aware IDOR detection that compares schema vs values (cross-account data access) to eliminate false positives |
 | **Custom Checks** | User-defined regex/string checks with severity, run against captured requests |
-| **Content Discovery** | Directory and file brute-forcing with custom wordlists |
+| **Content Discovery** | Directory/file brute-forcing with wildcard/catch-all baseline filtering & auto-finding for sensitive files (`.env`, `.bak`) |
 | **Crawler** | JS-aware autonomous spidering via Playwright (headless Chromium) |
+| **Collaborator (OAST)** | Self-hosted out-of-band server (Go) — detects blind XXE, blind SSRF, DNS exfiltration via DNS/HTTP interactions with webhook forwarding |
 | **Live Audit** | Continuous passive analysis of all proxied traffic |
 
 ### ⚡ Automation & Workflows
 | Module | Description |
 |--------|-------------|
+| **Auto-Auth Keeper** | Zero-config session recovery. Silently learns your login POSTs and auto-refreshes tokens/cookies if a scan hits a 401/403. |
 | **Scheduled Scans** | Cron-based scan scheduling (e.g. nightly full scans) |
 | **Webhooks** | Instant Slack/Discord alerts on new findings |
 | **Auto-Reports** | Automated JSON/HTML/Markdown report generation with severity charts |
-| **Auto-Exploit** | CWE-to-PoC engine with interactive HTML pages, context-aware encoding, and data extraction payloads (21+ CWE types) |
+| **Auto-Exploit** | CWE-to-PoC engine with interactive HTML pages, URL analysis + DB findings lookup → smart CWE ranking, context-aware encoding, data extraction payloads (21+ CWE types) |
+| **Recommendation Engine** | Listens to `finding.created` events and auto-generates actionable recommendations — "Fuzz this parameter", "Generate exploit", "Active scan endpoint", "Retest", "Crawl", "Content discovery" |
+| **Smart Triage** | Severity-based finding grouping with filtering, retest endpoint, recent findings view |
 | **CSRF PoC Generator** | One-click proof-of-concept HTML for CSRF vulnerabilities |
 | **Scan Templates** | Save and reuse scan configurations |
 | **Param Discovery** | Automated parameter discovery and chaining |
@@ -113,7 +104,15 @@ Nyx is designed to be a modern, extensible alternative to commercial tools like 
 ### 📊 Management
 | Module | Description |
 |--------|-------------|
-| **Dashboard** | Real-time overview: findings, trends, scan activity, traffic stats |
+| **Dashboard** | Real-time overview: findings, trends, scan activity, traffic stats, fuzz job counts, active pipelines, recommendations widget |
+| **Recommendations** | Dedicated page listing all active recommendations grouped by module, with execute and dismiss actions |
+| **Smart Triage** | Severity-grouped findings with filtering, retest, recent view |
+| **Plugins** | Plugin registry — list, register, toggle, delete, reload |
+| **Settings** | System info viewer, proxy host/port/mode editor |
+| **WebSocket Messages** | Captured WebSocket frames viewer with direction labels and payload inspection |
+| **Auth Scan** | Create/manage auth profiles (form/cookie/header), run authenticated active scans with auto-exploit generation |
+| **Scan Policies** | View/manage scan policy configuration files |
+| **Automations** | Webhook CRUD + test, Cron-based schedule CRUD + toggle, Scan templates, CSRF PoC generator |
 | **Projects** | Isolated workspaces with import/export |
 | **Organizer** | Tag, flag, and annotate requests for workflow management |
 | **Scan Jobs** | Monitor and manage running scans |
@@ -406,10 +405,14 @@ Intercept traffic from any device on the same LAN **without configuring the targ
 
 **How to use:**
 1. Launch Nyx **as administrator**
-2. **MITM** tab → enter target IP → optionally set gateway (auto-detected)
-3. Toggle DNS spoofing if needed → **Start Interception**
-4. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
-5. **Stop Interception** when done
+2. **MITM** tab → click **Scan Network** to auto-discover all devices on LAN
+3. Check the devices to intercept (or type IP manually via text field + _Add_)
+4. Set gateway (auto-detected) → Toggle DNS spoofing if needed
+5. Click **Start Interception** — ARP spoofs the selected targets
+6. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
+7. **Stop Interception** when done
+
+> **Scan uses a two-pass ARP probe:** fast pass (60 concurrent, 0.5s timeout) catches responsive devices, then a slow pass (20 concurrent, 1.5s timeout) probes remaining IPs. Devices with randomized MACs are identified via hostname (e.g. "S25-di-Cristian" → Samsung Galaxy S25). Multiple targets can be intercepted simultaneously.
 
 ---
 
@@ -536,6 +539,7 @@ ProxyEngine (mitmproxy thread)
   │           ├── SessionHandlingEngine  — cookie jar + session recording
   │           ├── LiveAuditService       — live traffic statistics
   │           ├── ApiInspector           — classifies API (REST/GraphQL/gRPC)
+  │           ├── RecommendationEngine   — listens to `finding.created` and generates next-step suggestions
   │           └── WebSocketManager       — real-time notifications to UI
   │
   ├── InterceptorEngine (mitmproxy addon)
@@ -559,12 +563,15 @@ ProxyEngine (mitmproxy thread)
 | **Fuzzer** | `httpx.AsyncClient` | Parameter fuzzing with wordlists, sends requests bypassing the proxy |
 | **Active Scanner** | `httpx.AsyncClient` | 110+ active probes, does not pass through the proxy |
 | **Auto-Exploit** | `httpx.AsyncClient` | Generates exploits and tests them directly |
+| **RecommendationEngine** | EventBus subscriber | Passive listener on `finding.created` — no HTTP calls, pure rule engine |
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | **Desktop** | Electron 43 | Native wrapper with auto-update, system tray, one-click launch |
 | **Frontend** | React 18, TypeScript, Tailwind CSS, Vite | Modern dark-theme SPA with live WebSocket updates |
 | **Backend** | Python 3.10, FastAPI, SQLAlchemy, mitmproxy | REST/WS API, proxy engine, scanners, fuzzer, auto-exploit, reports |
+| **Collaborator** | Go 1.22, custom DNS/HTTP server | Out-of-band (OAST) interaction detection — records DNS + HTTP callbacks, forwards via webhook |
+| **Native module** | C++17, pybind11 | High-performance gRPC protobuf frame parser for inspecting gRPC traffic |
 | **Database** | SQLite (default) or PostgreSQL | Persistent storage for all traffic, findings, and configs |
 | **Orchestration** | Docker Compose | One-command deployment |
 
@@ -705,16 +712,24 @@ nyx/
 │   ├── core/                # Database, events, storage, scope, OS abstractions
 │   ├── modules/             # Scanner, fuzzer, auto-exploit, decoder, etc.
 │   ├── reporter/            # Report generation (HTML/JSON/MD)
-│   ├── tests/               # 437+ pytest tests (CI-verified)
+│   ├── tests/               # 460+ pytest tests (CI-verified)
 │   └── wordlists/           # Built-in wordlists for fuzzer
 ├── frontend/                # React/TypeScript SPA
 │   ├── src/components/      # UI component directories
 │   ├── src/api/             # API client and endpoints
 │   └── src/store/           # Zustand state management
 ├── desktop/                 # Electron desktop wrapper
+├── collaborator/            # Go-based OAST server (DNS/HTTP callbacks)
+│   ├── dns/                 # DNS listener for interaction detection
+│   ├── http/                # HTTP handler for interaction recording
+│   └── webhook/             # Slack/Discord/custom webhook forwarding
+├── native/                  # C++ native modules
+│   └── grpc_parser/         # gRPC protobuf frame parser (pybind11 bindings)
+├── docs/                    # User guide, test guide, report docs
 ├── .github/workflows/       # CI/CD: build & test on push, release on tag
-├── docker-compose.yml       # Production deployment (PostgreSQL)
-└── docker-compose.dev.yml   # Development with hot-reload
+├── .dockerignore            # Docker build exclusions
+├── docker-compose.yml       # Production deployment (PostgreSQL + nginx)
+└── docker-compose.dev.yml   # Dev PostgreSQL only
 ```
 
 ---

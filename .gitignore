@@ -42,11 +42,15 @@ Desktop.ini
 *.sqlite3
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.log
 backend/data/
 data/
 *.nyx
 *.bloom
+startup.log
+startup.err
 
 # Reports
 backend/reports/
@@ -61,18 +65,17 @@ nyx_reports/
 
 # Desktop artifacts
 desktop/dist/
-desktop/build/
-desktop/release/
-desktop/out/
-desktop/node_modules/
-
-# Desktop Artifacts
-desktop/dist/
+desktop/dist_release/
 desktop/dist_old/
+desktop/dist_new/
+desktop/dist_old_bak/
 desktop/build/
+desktop/build-output/
 desktop/release/
 desktop/out/
 desktop/node_modules/
+desktop/backend/
+desktop/package.bak.json
 
 # Collaborator (Go)
 collaborator/collaborator
@@ -84,11 +87,29 @@ collaborator/vendor/
 native/build/
 native/cmake-build-*/
 
-# Temporary
+# Temporary & Binary
 tmp/
 temp/
 *.tmp
 *.temp
+*.bak
+*.bin
+*.pak
+
+# Nyx runtime secrets & state
+nyx.secret
+nyx.db
+nyx.db-shm
+nyx.db-wal
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.coveragerc
+tests/__pycache__/
 
 # GitHub Actions
 !.github/
+

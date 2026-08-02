@@ -19,18 +19,35 @@ for _dir in site.getsitepackages():
     if _asyncpg_pgproto_pyd:
         break
 
+# Find pydivert windivert_dll files for bundled inclusion (Windows only)
+_pydivert_binaries = []
+_site_pkgs = site.getsitepackages()
+if hasattr(site, "getusersitepackages"):
+    _site_pkgs.append(site.getusersitepackages())
+
+for _dir in _site_pkgs:
+    _p = Path(_dir) / "pydivert" / "windivert_dll"
+    if _p.is_dir():
+        for _f in _p.iterdir():
+            if _f.suffix in [".dll", ".sys"]:
+                _pydivert_binaries.append((str(_f), "pydivert/windivert_dll"))
+        break
+
 block_cipher = None
 
 a = Analysis(
     [str(BACKEND / "main.py")],
     pathex=[str(BACKEND)],
-    binaries=([(_asyncpg_pgproto_pyd, "asyncpg/pgproto")] if _asyncpg_pgproto_pyd else []),
+    binaries=(
+        [(_asyncpg_pgproto_pyd, "asyncpg/pgproto")] if _asyncpg_pgproto_pyd else []
+    ) + _pydivert_binaries,
     datas=[
         (str(BACKEND / "data"), "data"),
         (str(BACKEND / "alembic.ini"), "."),
         (str(BACKEND / "alembic"), "alembic"),
         (str(BACKEND / "wordlists"), "wordlists"),
         (str(BACKEND / "modules/fuzzer/wordlists"), "modules/fuzzer/wordlists"),
+        (str(BACKEND / "reporter/templates"), "reporter/templates"),
     ],
     hiddenimports=[
         "uvicorn",
@@ -71,13 +88,12 @@ a = Analysis(
         "modules.clickbandit.service",
         "modules.auth.models",
         "modules.auth.store",
-        "modules.reporter.service",
-        "modules.comparer.service",
+        "reporter.service",
         "modules.content_discovery.service",
         "modules.fuzzer.wordlists",
         "modules.crawler.service",
         "modules.http_client",
-        "modules.auto_exploit.service",
+        "modules.auto_exploit.engine",
         "core.proxy.addons.logger",
         "core.events.bus",
         "core.storage.database",
@@ -93,7 +109,12 @@ a = Analysis(
         "api.deps",
         "core.proxy.addons",
         "core.proxy.addons.logger",
+        "pydivert",
+        "pydivert.windivert_dll",
+        "pydivert.windivert_dll.structs",
         "core.proxy.addons.injector",
+        "core.api_auth",
+        "qrcode",
     ],
     hookspath=[],
     hooksconfig={},
@@ -107,7 +128,6 @@ a = Analysis(
         "matplotlib",
         "scipy",
         "pandas",
-        "PIL",
         "cv2",
         "IPython",
         "jupyter",
