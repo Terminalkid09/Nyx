@@ -1,9 +1,12 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ExternalLink, RefreshCw } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { useFindingsStore } from '../../store/useFindingsStore'
 import { useProxyStore } from '../../store/useProxyStore'
+import { useFuzzerStore } from '../../store/useFuzzerStore'
+import { useAutoExploitStore } from '../../store/useAutoExploitStore'
+import { useSessionStore } from '../../store/useSessionStore'
 import { NyxFinding } from '../../types'
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -15,10 +18,41 @@ const SEVERITY_COLORS: Record<string, string> = {
 }
 
 export function PassiveFindings() {
-  const findings = useFindingsStore((s) => s.findings)
+  const { findings, setFindings } = useFindingsStore()
+  const { setFuzzerTarget } = useFuzzerStore()
+  const { setTarget: setAutoExploitTarget } = useAutoExploitStore()
   const requests = useProxyStore((s) => s.requests)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const navigate = useNavigate()
   const [retesting, setRetesting] = useState<Record<string, 'idle' | 'loading' | 'confirmed' | 'fixed' | 'error'>>({})
+
+  useEffect(() => {
+    const handleOutsideClick = () => setOpenMenuId(null)
+    window.addEventListener('click', handleOutsideClick)
+    return () => window.removeEventListener('click', handleOutsideClick)
+  }, [])
+
+  // Fetch history for the active session
+  useEffect(() => {
+    if (!activeSessionId) return
+    let mounted = true
+    const fetchHistory = async () => {
+      try {
+        const { data } = await apiClient.get('/api/findings', {
+          params: { session_id: activeSessionId, per_page: 500 }
+        })
+        if (mounted) {
+          setFindings(data.items)
+        }
+      } catch (err) {
+        console.error('Failed to load findings history', err)
+      }
+    }
+    fetchHistory()
+    return () => { mounted = false }
+  }, [activeSessionId, setFindings])
 
   const sendToRepeater = useCallback(async (f: NyxFinding) => {
     const req = requests.find((r) => r.id === f.request_id)
@@ -82,24 +116,61 @@ export function PassiveFindings() {
                   {f.cwe && (
                     <span className="text-xs text-gray-500 ml-auto">{f.cwe}</span>
                   )}
-                  <div className="flex items-center gap-1 ml-auto">
-                    {req && (
-                      <button
-                        onClick={() => sendToRepeater(f)}
-                        className="text-gray-500 hover:text-purple-400 transition-colors p-1"
-                        title="Send to Repeater"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                  <div className="relative inline-block text-left ml-2" onClick={(e) => e.stopPropagation()}>
                     <button
-                      onClick={() => retest(f.id)}
-                      disabled={retestState === 'loading'}
-                      className="text-gray-500 hover:text-purple-400 transition-colors p-1 disabled:opacity-50"
-                      title="Retest"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setOpenMenuId(openMenuId === f.id ? null : f.id)
+                      }}
+                      className="text-gray-500 hover:text-gray-300 px-2 py-1 transition-colors"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${retestState === 'loading' ? 'animate-spin' : ''}`} />
+                      ⋮
                     </button>
+                    
+                    {openMenuId === f.id && (
+                      <div className="absolute right-0 top-6 w-40 bg-gray-800 border border-gray-700 rounded shadow-xl z-50 flex flex-col py-1 text-xs text-left">
+                        <button
+                          className="text-left px-3 py-1.5 hover:bg-gray-700 text-gray-200"
+                          onClick={() => {
+                            setOpenMenuId(null)
+                            sendToRepeater(f)
+                          }}
+                        >
+                          Send to Repeater
+                        </button>
+                        
+                        <button
+                          className="text-left px-3 py-1.5 hover:bg-gray-700 text-gray-200"
+                          onClick={() => {
+                            setOpenMenuId(null)
+                            if (req) {
+                              const body = req.request_body ? `\r\n${req.request_body}` : ''
+                              setFuzzerTarget(req.id, `${req.method || 'GET'} ${req.path || f.url} HTTP/1.1\r\nHost: ${req.host || 'localhost'}\r\n${body}`)
+                              navigate('/fuzzer')
+                            }
+                          }}
+                        >
+                          Send to Fuzzer
+                        </button>
+                        
+                        <button
+                          className="text-left px-3 py-1.5 hover:bg-gray-700 text-purple-300 font-medium"
+                          onClick={() => {
+                            setOpenMenuId(null)
+                            setAutoExploitTarget({
+                              type: 'finding',
+                              id: f.id,
+                              url: f.url || '',
+                              cwe: f.cwe || undefined,
+                              param: f.param || undefined,
+                            })
+                            navigate('/auto-exploit')
+                          }}
+                        >
+                          Send to Auto-Exploit
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <p className="text-xs text-gray-400">{f.description}</p>

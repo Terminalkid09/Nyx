@@ -8,6 +8,7 @@ import {
 } from '../../api/endpoints/comparer'
 import { ComparerItem, DiffResult } from '../../types'
 import { useProxyStore } from '../../store/useProxyStore'
+import { ProxyRequestPicker } from '../ProxyRequestPicker/ProxyRequestPicker'
 
 interface DiffLine {
   type: 'added' | 'removed' | 'unchanged'
@@ -145,27 +146,21 @@ export function Comparer() {
         <div>
           <div className="text-xs font-medium text-gray-400 mb-1">Send to Comparer from Proxy</div>
           <div className="flex gap-2 items-center mb-2">
-            <select
-              className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
-              value={leftReqId}
-              onChange={(e) => setLeftReqId(e.target.value)}
-            >
-              <option value="">Left request...</option>
-              {requests.slice(0, 100).map((r) => (
-                <option key={r.id} value={r.id}>{r.method} {r.path}</option>
-              ))}
-            </select>
-            <span className="text-gray-500 text-xs">vs</span>
-            <select
-              className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
-              value={rightReqId}
-              onChange={(e) => setRightReqId(e.target.value)}
-            >
-              <option value="">Right request...</option>
-              {requests.slice(0, 100).map((r) => (
-                <option key={r.id} value={r.id}>{r.method} {r.path}</option>
-              ))}
-            </select>
+            <div className="flex-1">
+              <ProxyRequestPicker
+                value={leftReqId}
+                onChange={(req) => req && setLeftReqId(req.id)}
+                placeholder="Search left request..."
+              />
+            </div>
+            <span className="text-gray-500 text-xs shrink-0">vs</span>
+            <div className="flex-1">
+              <ProxyRequestPicker
+                value={rightReqId}
+                onChange={(req) => req && setRightReqId(req.id)}
+                placeholder="Search right request..."
+              />
+            </div>
           </div>
         </div>
 

@@ -19,7 +19,7 @@ export function RequestDetail({ request }: Props) {
       .join('\n')
   }
 
-  const requestRaw = `${request.method} ${request.path} ${request.http_version}\n${formatHeaders(request.request_headers)}\n\n${request.request_body ?? ''}`
+  const requestRaw = `${request.method} ${request.path} ${request.http_version || 'HTTP/1.1'}\n${formatHeaders(request.request_headers)}\n\n${request.request_body ?? ''}`
 
   const responseRaw = request.response_status
     ? `HTTP/1.1 ${request.response_status} ${request.response_reason ?? ''}\n${formatHeaders(request.response_headers)}\n\n${request.response_body ?? ''}`

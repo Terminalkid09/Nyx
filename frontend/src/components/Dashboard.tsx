@@ -7,10 +7,12 @@ import {
 } from 'recharts'
 import {
   Shield, Activity, Globe, Monitor, Plus, Play, AlertTriangle,
-  Download, XCircle, RefreshCw, Zap, Webhook, Calendar, FileText,
+  Download, XCircle, RefreshCw, Zap, Webhook, Calendar,
   TrendingUp, Target, Bug, Server, ExternalLink, Clock, CheckCircle, HelpCircle,
+  Lightbulb, ChevronRight, X,
 } from 'lucide-react'
 import { apiClient } from '../api/client'
+import { useSessionStore } from '../store/useSessionStore'
 import { UnifiedProgress } from './UnifiedProgress'
 import { OnboardingTutorial } from './OnboardingTutorial'
 
@@ -25,11 +27,21 @@ interface DashboardStats {
     total_checks: number; passed_checks: number; failed_checks: number; created_at: string
   }>
   active_scans: number
+  active_fuzz_jobs: number
+  active_pipelines: number
+  recommendations: number
   proxy_requests_today: number
   total_endpoints: number
   recent_findings: Array<{
     id: string; title: string; severity: string; endpoint: string; module: string; created_at: string
   }>
+}
+
+interface Recommendation {
+  id: string; rule_id: string; label: string; description: string
+  module: string; icon: string; priority: number
+  finding: { id: string; cwe: string; severity: string; title: string; module: string }
+  created_at: string; dismissed: boolean; executed: boolean
 }
 
 const SEVERITY_CONFIG: Record<string, { color: string; fill: string; bg: string; dot: string }> = {
@@ -76,43 +88,59 @@ function StatCard({ label, value, icon: Icon, color, onClick }: {
 
 export function Dashboard() {
   const navigate = useNavigate()
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [recs, setRecs] = useState<Recommendation[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [generating, setGenerating] = useState(false)
   const [showTutorial, setShowTutorial] = useState(() => {
     return localStorage.getItem('nyx_tutorial_dismissed') !== 'true'
   })
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadData = () => {
-    apiClient.get('/api/dashboard/stats')
+    const params = activeSessionId ? { session_id: activeSessionId } : {}
+    apiClient.get('/api/dashboard/stats', { params })
       .then(r => { setStats(r.data); setError('') })
       .catch(err => setError(err.response?.data?.detail || err.message))
       .finally(() => setLoading(false))
+      apiClient.get('/api/recommendations?limit=10')
+      .then(r => setRecs(r.data.recommendations || []))
+      .catch(() => {})
   }
 
   useEffect(() => {
     loadData()
     pollingRef.current = setInterval(loadData, 8000)
     return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
-  }, [])
+  }, [activeSessionId])
 
-  const handleGenerateReport = async () => {
-    setGenerating(true)
+  const handleGenerateReport = () => {
+    navigate('/reporter')
+  }
+
+  const dismissRec = async (recId: string) => {
     try {
-      const response = await apiClient.post('/api/automations/reports/generate', {}, { responseType: 'blob' })
-      const url = window.URL.createObjectURL(new Blob([response.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.setAttribute('download', `nyx-report-${Date.now()}.pdf`)
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      window.URL.revokeObjectURL(url)
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message)
-    } finally { setGenerating(false) }
+      await apiClient.post('/api/recommendations/dismiss', { rec_id: recId })
+      setRecs(prev => prev.filter(r => r.id !== recId))
+    } catch {}
+  }
+
+  const executeRec = async (rec: Recommendation) => {
+    try {
+      await apiClient.post('/api/recommendations/execute', { rec_id: rec.id })
+      setRecs(prev => prev.filter(r => r.id !== rec.id))
+      const moduleRoutes: Record<string, string> = {
+        fuzzer: '/fuzzer',
+        auto_exploit: '/auto-exploit',
+        active_scanner: '/scanner',
+        triage: '/triage',
+        crawler: '/crawler',
+        content_discovery: '/content-discovery',
+      }
+      const route = moduleRoutes[rec.module] || '/'
+      navigate(route)
+    } catch {}
   }
 
   if (loading) {
@@ -202,6 +230,7 @@ export function Dashboard() {
           <div className="flex gap-2 min-w-max">
             {(window as any).nyxDesktop && (
               <button onClick={() => (window as any).nyxDesktop.launchBrowser()}
+                title="Open built-in browser proxied through Nyx to capture HTTP traffic"
                 className="flex flex-col items-center gap-1 bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/30 rounded-lg p-2 transition-colors relative shrink-0 w-20 h-16">
                 <Globe size={16} className="text-orange-400" />
                 <span className="text-[10px] text-orange-300 font-bold whitespace-nowrap">Browser</span>
@@ -229,23 +258,28 @@ export function Dashboard() {
                 <span className="text-[10px] text-gray-400 whitespace-nowrap">{btn.label}</span>
               </button>
             ))}
-            <button onClick={handleGenerateReport} disabled={generating}
-              className="flex flex-col items-center gap-1 bg-gray-800 hover:bg-gray-700 rounded-lg p-2 transition-colors disabled:opacity-50 shrink-0 w-20 h-16">
+            <button onClick={handleGenerateReport}
+              className="flex flex-col items-center gap-1 bg-gray-800 hover:bg-gray-700 rounded-lg p-2 transition-colors shrink-0 w-20 h-16">
               <Download size={16} className="text-purple-400" />
-              <span className="text-[10px] text-gray-400">{generating ? '...' : 'Report'}</span>
+              <span className="text-[10px] text-gray-400">Report</span>
             </button>
           </div>
         </div>
 
         {/* Stats Row */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
           <AnimatedStat label="Total Findings" value={totalFindings} icon={AlertTriangle} color="#a855f7"
             subtitle={`${s.findings_by_severity.critical || 0} critical`} />
-          <AnimatedStat label="Active Scans" value={s.active_scans} icon={Zap} color="#22d3ee"
-            subtitle={s.active_scans > 0 ? 'Running' : 'Idle'} />
+          <StatCard label="Active Scans" value={s.active_scans} icon={Zap} color="#22d3ee"
+            onClick={() => navigate('/scan-jobs')} />
+          <StatCard label="Fuzz Jobs" value={s.active_fuzz_jobs} icon={Target} color="#f59e0b"
+            onClick={() => navigate('/fuzzer')} />
           <AnimatedStat label="Endpoints" value={s.total_endpoints} icon={Server} color="#22c55e" />
           <AnimatedStat label="Proxy Today" value={s.proxy_requests_today} icon={Globe} color="#3b82f6" />
-          <StatCard label="Scan History" value={`${s.scan_history.length} total`} icon={Clock} color="#f59e0b" />
+          <StatCard label="Pipelines" value={s.active_pipelines || 0} icon={Activity} color="#06b6d4"
+            onClick={() => navigate('/automation')} />
+          <StatCard label="Recommendations" value={s.recommendations || 0} icon={Lightbulb} color="#eab308"
+            onClick={() => navigate('/recommendations')} />
         </div>
 
         {/* Active Scans */}
@@ -276,6 +310,48 @@ export function Dashboard() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Recommendations Panel */}
+        {recs.length > 0 && (
+          <div className="bg-gray-900/80 border border-amber-700/30 rounded-lg p-3">
+            <div className="text-xs font-medium text-amber-400 mb-3 flex items-center gap-2">
+              <Lightbulb size={14} />
+              Next Steps ({recs.length} recommendation{recs.length > 1 ? 's' : ''})
+            </div>
+            <div className="space-y-1.5">
+              {recs.slice(0, 6).map(rec => (
+                <div key={rec.id} className="flex items-center gap-2 bg-gray-800/60 rounded px-3 py-2 hover:bg-gray-800 transition-colors group">
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    rec.finding.severity === 'critical' ? 'bg-red-500' :
+                    rec.finding.severity === 'high' ? 'bg-orange-500' :
+                    rec.finding.severity === 'medium' ? 'bg-yellow-500' : 'bg-blue-500'
+                  }`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-gray-200 font-medium">{rec.label}</div>
+                    <div className="text-[10px] text-gray-500 truncate">{rec.description}</div>
+                  </div>
+                  <span className="text-[10px] text-gray-600 hidden md:block truncate max-w-[120px]">{rec.finding.title}</span>
+                  <button onClick={() => executeRec(rec)}
+                    className="p-1 rounded text-amber-400 hover:text-amber-300 hover:bg-amber-900/30 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Execute">
+                    <ChevronRight size={14} />
+                  </button>
+                  <button onClick={() => dismissRec(rec.id)}
+                    className="p-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Dismiss">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {recs.length > 6 && (
+              <button onClick={() => navigate('/recommendations')}
+                className="text-[10px] text-amber-500 hover:text-amber-400 mt-2 transition-colors">
+                View all {recs.length} recommendations
+              </button>
+            )}
           </div>
         )}
 

@@ -1,151 +1,149 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Plus } from 'lucide-react'
-import { useSessionStore } from '../../store/useSessionStore'
+import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Plus, Bug, Puzzle, Settings2, AlertTriangle, FileText, Webhook, Lightbulb } from 'lucide-react'
+import { apiClient } from '../../api/client'
+import { SessionSwitcher } from './SessionSwitcher'
 
 const navGroups = [
   {
     name: 'GENERAL',
     items: [
-      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { to: '/projects', label: 'Projects', icon: FolderOpen },
-      { to: '/organizer', label: 'Organizer', icon: BookOpen },
+      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, badgeKey: null },
+      { to: '/recommendations', label: 'Recommendations', icon: Lightbulb, badgeKey: 'recommendations' },
+      { to: '/projects', label: 'Projects', icon: FolderOpen, badgeKey: null },
+      { to: '/organizer', label: 'Organizer', icon: BookOpen, badgeKey: null },
     ]
   },
   {
     name: 'TRAFFIC',
     items: [
-      { to: '/proxy', label: 'Proxy', icon: Shield },
-      { to: '/mitm', label: 'MITM', icon: Wifi },
-      { to: '/interceptor', label: 'Interceptor', icon: PauseCircle },
-      { to: '/repeater', label: 'Repeater', icon: Repeat },
-      { to: '/match-replace', label: 'M&R Rules', icon: Replace },
-      { to: '/websocket', label: 'WebSockets', icon: Globe },
+      { to: '/proxy', label: 'Proxy', icon: Shield, badgeKey: null },
+      { to: '/mitm', label: 'MITM', icon: Wifi, badgeKey: null },
+      { to: '/interceptor', label: 'Interceptor', icon: PauseCircle, badgeKey: null },
+      { to: '/repeater', label: 'Repeater', icon: Repeat, badgeKey: null },
+      { to: '/match-replace', label: 'M&R Rules', icon: Replace, badgeKey: null },
+      { to: '/websocket', label: 'WebSockets', icon: Globe, badgeKey: null },
     ]
   },
   {
     name: 'SCANNING & AUTOMATION',
     items: [
-      { to: '/scanner', label: 'Scanner', icon: Search },
-      { to: '/fuzzer', label: 'Fuzzer', icon: Zap },
-      { to: '/content-discovery', label: 'Discovery', icon: Compass },
-      { to: '/automation', label: 'AutoScan & Alerts', icon: Activity },
-      { to: '/live-audit', label: 'Live Audit', icon: Radio },
+      { to: '/scanner', label: 'Scanner', icon: Search, badgeKey: null },
+      { to: '/fuzzer', label: 'Fuzzer', icon: Zap, badgeKey: null },
+      { to: '/content-discovery', label: 'Discovery', icon: Compass, badgeKey: null },
+      { to: '/automation', label: 'AutoScan & Alerts', icon: Activity, badgeKey: null },
+      { to: '/live-audit', label: 'Live Audit', icon: Radio, badgeKey: null },
     ]
   },
   {
     name: 'ADVANCED TOOLS',
     items: [
-      { to: '/comparer', label: 'Comparer', icon: GitCompare },
-      { to: '/inspector', label: 'Inspector', icon: SearchIcon },
-      { to: '/search', label: 'Search', icon: FileSearch },
+      { to: '/comparer', label: 'Comparer', icon: GitCompare, badgeKey: null },
+      { to: '/auto-exploit', label: 'Auto Exploit', icon: Bug, badgeKey: null },
+      { to: '/ws-messages', label: 'WebSocket MSG', icon: Globe, badgeKey: null },
+      { to: '/triage', label: 'Smart Triage', icon: AlertTriangle, badgeKey: null },
+      { to: '/auth-scan', label: 'Auth Scan', icon: Shield, badgeKey: null },
+      { to: '/scan-policies', label: 'Scan Policies', icon: FileText, badgeKey: null },
+      { to: '/automations', label: 'Automations', icon: Webhook, badgeKey: null },
+      { to: '/plugins', label: 'Plugins', icon: Puzzle, badgeKey: null },
+      { to: '/inspector', label: 'Inspector', icon: SearchIcon, badgeKey: null },
+      { to: '/search', label: 'Search', icon: FileSearch, badgeKey: null },
     ]
   },
   {
     name: 'SETTINGS',
     items: [
-      { to: '/proxy-config', label: 'Proxy Config', icon: Monitor },
-      { to: '/auth', label: 'Authentication', icon: Key },
-      { to: '/session', label: 'Session Handling', icon: Users },
-      { to: '/scan-jobs', label: 'Scan Jobs', icon: Play },
+      { to: '/proxy-config', label: 'Upstream Proxy', icon: Monitor, badgeKey: null },
+      { to: '/settings', label: 'Settings', icon: Settings2, badgeKey: null },
+      { to: '/auth', label: 'Authentication', icon: Key, badgeKey: null },
+      { to: '/session', label: 'Session Handling', icon: Users, badgeKey: null },
+      { to: '/scan-jobs', label: 'Scan Jobs', icon: Play, badgeKey: null },
     ]
   }
 ]
 
-function SessionSwitcher() {
-  const { sessions, activeSessionId, fetchSessions, setActiveSession, createSession } = useSessionStore()
-  const [creating, setCreating] = useState(false)
-  const [newName, setNewName] = useState('')
+export function Sidebar() {
+  const [collapsed, setCollapsed] = useState(false)
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(navGroups.map(g => g.name))
+  const [badges, setBadges] = useState<Record<string, number>>({})
 
-  useEffect(() => { fetchSessions() }, [])
+  useEffect(() => {
+    const fetchBadges = async () => {
+      try {
+        const r = await apiClient.get('/api/recommendations/stats')
+        const total = r.data.total || 0
+        setBadges({ recommendations: total })
+      } catch {}
+    }
+    fetchBadges()
+    const interval = setInterval(fetchBadges, 10000)
+    return () => clearInterval(interval)
+  }, [])
 
-  const activeSession = sessions.find(s => s.id === activeSessionId)
-
-  const handleCreate = async () => {
-    if (!newName.trim()) return
-    const s = await createSession(newName.trim())
-    setActiveSession(s.id)
-    setNewName('')
-    setCreating(false)
+  const toggleGroup = (name: string) => {
+    setExpandedGroups(prev =>
+      prev.includes(name) ? prev.filter(g => g !== name) : [...prev, name]
+    )
   }
 
   return (
-    <div className="px-3 pt-3 border-t border-gray-800">
-      <span className="px-1 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 block">Active Session</span>
-      <select
-        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 mb-1"
-        value={activeSessionId}
-        onChange={(e) => setActiveSession(e.target.value)}
-      >
-        {sessions.length === 0 && <option value="00000000-0000-0000-0000-000000000001">Default Session</option>}
-        {sessions.map(s => (
-          <option key={s.id} value={s.id}>{s.name}</option>
-        ))}
-      </select>
-      {creating ? (
-        <div className="flex gap-1">
-          <input
-            className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder:text-gray-600"
-            placeholder="Session name..."
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            autoFocus
-          />
-          <button onClick={handleCreate} className="bg-purple-600 hover:bg-purple-700 px-2 py-1 rounded text-xs text-white">✓</button>
-          <button onClick={() => setCreating(false)} className="bg-gray-700 px-2 py-1 rounded text-xs text-gray-400">✕</button>
-        </div>
-      ) : (
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
-        >
-          <Plus size={11} /> New Session
+    <aside className={`bg-gray-950 border-r border-gray-800 flex flex-col transition-all duration-200 ${collapsed ? 'w-14' : 'w-56'} shrink-0 overflow-hidden`}>
+      <div className="p-3 border-b border-gray-800 flex items-center justify-between">
+        {!collapsed && (
+          <span className="text-sm font-bold text-purple-400 tracking-wider">NYX</span>
+        )}
+        <button onClick={() => setCollapsed(!collapsed)}
+          className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors">
+          <ChevronDown size={14} className={`transition-transform ${collapsed ? '-rotate-90' : ''}`} />
         </button>
-      )}
-    </div>
-  )
-}
+      </div>
 
-export function Sidebar() {
-  return (
-    <aside className="w-60 bg-gray-900 border-r border-gray-800 flex flex-col py-4 overflow-y-auto no-scrollbar">
-      <div className="flex items-center gap-3 px-6 mb-6">
-        <div className="w-8 h-8 rounded bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center font-bold text-white text-lg shadow-[0_0_15px_rgba(147,51,234,0.5)]">
-          N
+      {!collapsed && (
+        <div className="p-3 border-b border-gray-800">
+          <SessionSwitcher />
         </div>
-        <span className="font-bold text-xl tracking-wide text-gray-100">Nyx</span>
-      </div>
-      
-      <div className="flex flex-col gap-6 px-3 flex-1">
-        {navGroups.map((group) => (
-          <div key={group.name} className="flex flex-col gap-1 w-full">
-            <span className="px-3 text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">
-              {group.name}
-            </span>
-            {group.items.map(({ to, label, icon: Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2 rounded-md transition-all group relative text-sm ${
-                    isActive
-                      ? 'bg-purple-600/10 text-purple-400 font-medium'
-                      : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800/50'
-                  }`
-                }
-              >
-                <Icon size={16} className="flex-shrink-0" />
-                <span className="truncate">{label}</span>
-              </NavLink>
-            ))}
-          </div>
-        ))}
-      </div>
+      )}
 
-      <div className="mt-4">
-        <SessionSwitcher />
-      </div>
+      <nav className="flex-1 overflow-y-auto p-2 space-y-1">
+        {navGroups.map(group => {
+          const isExpanded = expandedGroups.includes(group.name)
+          return (
+            <div key={group.name}>
+              {!collapsed && (
+                <button onClick={() => toggleGroup(group.name)}
+                  className="flex items-center gap-1 px-2 py-1.5 text-[10px] text-gray-600 hover:text-gray-400 w-full transition-colors">
+                  <ChevronDown size={10} className={`transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                  {group.name}
+                </button>
+              )}
+              {isExpanded && group.items.map(item => (
+                <NavLink key={item.to} to={item.to}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                      collapsed ? 'justify-center px-1' : ''
+                    } ${
+                      isActive
+                        ? 'bg-purple-600/20 text-purple-300 border border-purple-700/30'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 border border-transparent'
+                    }`
+                  }
+                  title={collapsed ? item.label : undefined}
+                >
+                  <item.icon size={14} className="shrink-0" />
+                  {!collapsed && (
+                    <span className="truncate flex-1">{item.label}</span>
+                  )}
+                  {!collapsed && item.badgeKey && badges[item.badgeKey] > 0 && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-600/20 text-amber-400 border border-amber-700/30">
+                      {badges[item.badgeKey]}
+                    </span>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          )
+        })}
+      </nav>
     </aside>
   )
 }

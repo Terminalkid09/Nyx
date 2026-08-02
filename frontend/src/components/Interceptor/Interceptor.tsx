@@ -19,6 +19,8 @@ export function Interceptor() {
   const [rules, setRules] = useState<InterceptorRule[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedItem, setSelectedItem] = useState<InterceptedItem | null>(null)
+  const [editMethod, setEditMethod] = useState('')
+  const [editUrl, setEditUrl] = useState('')
   const [editHeaders, setEditHeaders] = useState('')
   const [editBody, setEditBody] = useState('')
   const [showAddRule, setShowAddRule] = useState(false)
@@ -54,7 +56,11 @@ export function Interceptor() {
     })
   }
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    loadData()
+    const interval = setInterval(loadData, 3000)
+    return () => clearInterval(interval)
+  }, [])
 
   const handleToggleInterceptor = async () => {
     try {
@@ -68,12 +74,12 @@ export function Interceptor() {
   const handleForward = async (item: InterceptedItem) => {
     try {
       const mods: any = {}
-      if (item.modified_method) mods.method = item.modified_method
-      if (item.modified_url) mods.url = item.modified_url
-      if (editHeaders && selectedItem?.id === item.id) {
+      if (editMethod && selectedItem?.id === item.id) mods.method = editMethod
+      if (editUrl && selectedItem?.id === item.id) mods.url = editUrl
+      if (selectedItem?.id === item.id && editHeaders.trim()) {
         try { mods.headers = JSON.parse(editHeaders) } catch {}
       }
-      if (editBody && selectedItem?.id === item.id) {
+      if (selectedItem?.id === item.id && editBody) {
         mods.body = editBody
       }
       await forwardItem(item.id, mods)
@@ -96,9 +102,13 @@ export function Interceptor() {
 
   const selectItem = (item: InterceptedItem) => {
     setSelectedItem(item)
-    if (item.modified_headers) setEditHeaders(JSON.stringify(item.modified_headers, null, 2))
+    setEditMethod(item.modified_method || item.method || '')
+    setEditUrl(item.modified_url || item.url || '')
+    const baseHeaders = item.modified_headers || item.headers || {}
+    if (Object.keys(baseHeaders).length) setEditHeaders(JSON.stringify(baseHeaders, null, 2))
     else setEditHeaders('')
-    setEditBody(item.modified_body || '')
+    const baseBody = item.modified_body ?? item.body ?? ''
+    setEditBody(baseBody)
   }
 
   const handleAddRule = async () => {
@@ -221,8 +231,8 @@ export function Interceptor() {
                           {item.direction}
                         </span>
                       </td>
-                      <td className="px-3 py-2 font-mono text-purple-400">{item.modified_method || '…'}</td>
-                      <td className="px-3 py-2 text-gray-300 truncate max-w-xs">{item.modified_url || '…'}</td>
+                      <td className="px-3 py-2 font-mono text-purple-400">{item.method || item.modified_method || '…'}</td>
+                      <td className="px-3 py-2 text-gray-300 truncate max-w-xs">{item.url || item.modified_url || '…'}</td>
                       <td className="px-3 py-2 text-gray-400">{item.status}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -252,21 +262,53 @@ export function Interceptor() {
 
         {selectedItem && (
           <div className="bg-gray-900 border border-gray-800 rounded p-3 space-y-2">
-            <div className="text-xs font-medium text-gray-400">Modify Item</div>
+            <div className="text-xs font-medium text-gray-400 flex items-center gap-2">
+              Modify Item
+              {selectedItem.direction === 'response' && selectedItem.status_code != null && (
+                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                  selectedItem.status_code >= 500 ? 'bg-red-500/20 text-red-400'
+                  : selectedItem.status_code >= 400 ? 'bg-orange-500/20 text-orange-400'
+                  : selectedItem.status_code >= 300 ? 'bg-blue-500/20 text-blue-400'
+                  : 'bg-green-500/20 text-green-400'
+                }`}>
+                  {selectedItem.status_code}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Method</label>
+                <input
+                  className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1 text-xs font-mono text-purple-300"
+                  value={editMethod}
+                  onChange={(e) => setEditMethod(e.target.value)}
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-gray-500 block mb-1">URL</label>
+                <input
+                  className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1 text-xs font-mono text-gray-300"
+                  value={editUrl}
+                  onChange={(e) => setEditUrl(e.target.value)}
+                />
+              </div>
+            </div>
             <div>
               <label className="text-xs text-gray-500 block mb-1">Headers (JSON)</label>
               <textarea
-                className="w-full h-24 bg-gray-950 border border-gray-800 rounded p-2 text-xs font-mono text-gray-300 resize-none"
+                className="w-full h-28 bg-gray-950 border border-gray-800 rounded p-2 text-xs font-mono text-gray-300 resize-none"
                 value={editHeaders}
                 onChange={(e) => setEditHeaders(e.target.value)}
+                placeholder="{ &quot;Host&quot;: &quot;example.com&quot;, ... }"
               />
             </div>
             <div>
               <label className="text-xs text-gray-500 block mb-1">Body</label>
               <textarea
-                className="w-full h-24 bg-gray-950 border border-gray-800 rounded p-2 text-xs font-mono text-gray-300 resize-none"
+                className="w-full h-28 bg-gray-950 border border-gray-800 rounded p-2 text-xs font-mono text-gray-300 resize-none"
                 value={editBody}
                 onChange={(e) => setEditBody(e.target.value)}
+                placeholder="Request/response body (empty if none). Automatically prefilled from the intercepted content."
               />
             </div>
             <div className="flex gap-2">

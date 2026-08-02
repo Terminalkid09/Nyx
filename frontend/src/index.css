@@ -1,3 +1,23 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  background: #030712;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.12s ease-in-out;
+}
+
+/* Prevent layout shift on loading states */
+.main-content {
+  @apply flex-1 overflow-y-auto overflow-x-hidden animate-fade-in;
+  min-height: 0;
+}

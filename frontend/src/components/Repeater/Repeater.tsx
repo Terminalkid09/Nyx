@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useSearchParams, useLocation } from 'react-router-dom'
 import { Plus, X, History } from 'lucide-react'
 import { RequestEditor } from './RequestEditor'
 import { sendRequest, fetchTabs, createTab, closeTab, fetchTabHistory } from '../../api/endpoints/repeater'
@@ -19,15 +20,21 @@ interface TabData {
 
 let tabCounter = 1
 
-function freshTab(name?: string): TabData {
+function freshTab(url?: string, method?: string, headers?: string, body?: string, name?: string): TabData {
+  let scheme = 'https'
+  let cleanUrl = url || ''
+  if (cleanUrl) {
+    const m = cleanUrl.match(/^(https?):\/\//)
+    if (m) { scheme = m[1]; cleanUrl = cleanUrl.slice(m[0].length) }
+  }
   return {
     id: crypto.randomUUID?.() || Math.random().toString(36).slice(2, 10),
     name: name || `Request ${tabCounter++}`,
-    method: 'GET',
-    scheme: 'https',
-    url: '',
-    headers: '',
-    body: '',
+    method: method || 'GET',
+    scheme,
+    url: cleanUrl,
+    headers: headers || '',
+    body: body || '',
     response: null,
     history: [],
     loading: false,
@@ -36,11 +43,60 @@ function freshTab(name?: string): TabData {
 }
 
 export function Repeater() {
-  const [tabs, setTabs] = useState<TabData[]>([freshTab()])
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  const initialTabId = searchParams.get('tab')
+  const queryUrl = searchParams.get('url')
+  const navState = (location.state || {}) as Record<string, any>
+  const prefillUrl = navState.url || queryUrl || ''
+  const prefillMethod = navState.method || ''
+  const prefillHeaders = navState.headers || ''
+  const prefillBody = navState.body || ''
+  const [tabs, setTabs] = useState<TabData[]>([freshTab(prefillUrl, prefillMethod, prefillHeaders, prefillBody)])
   const [activeId, setActiveId] = useState<string>(tabs[0].id)
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [historyOpen, setHistoryOpen] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchTabs().then((backendTabs) => {
+      if (!backendTabs || backendTabs.length === 0) return
+      Promise.all(
+        backendTabs.map((t: any) =>
+          fetchTabHistory(t.id).then((history) => ({ tab: t, history })).catch(() => ({ tab: t, history: [] })),
+        ),
+      ).then((results) => {
+        const mapped = results.map(({ tab, history }) => {
+          const haveData = history.length > 0 ? history[history.length - 1] : null
+          let url = haveData?.url || ''
+          let scheme = 'https'
+          const m = typeof url === 'string' && url.match(/^(https?):\/\//)
+          if (m) { scheme = m[1]; url = url.slice(m[0].length) }
+          return {
+            id: tab.id,
+            name: tab.name || 'Request',
+            method: haveData?.method || 'GET',
+            scheme,
+            url,
+            headers: haveData?.headers ? Object.entries(haveData.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : '',
+            body: haveData?.body || '',
+            response: haveData?.response_status ? { status: haveData.response_status, headers: haveData.response_headers, body: haveData.response_body, time_ms: haveData.time_ms } : null,
+            history,
+            loading: false,
+            error: null,
+          } as TabData
+        })
+        // If this tab was opened with prefill data (e.g. "Send to Repeater"
+        // from Triage/Fuzzer/Scanner), keep it instead of letting the backend
+        // tabs overwrite the user's pending request.
+        const hasPrefill = !!(prefillUrl || prefillMethod || prefillHeaders || prefillBody)
+        const nextTabs = hasPrefill ? [...tabs, ...mapped.filter(t => t.id !== tabs[0].id)] : mapped
+        setTabs(nextTabs)
+        const targetIdx = initialTabId ? mapped.findIndex(t => t.id === initialTabId) : -1
+        setActiveId(targetIdx >= 0 ? mapped[targetIdx].id : (hasPrefill ? tabs[0].id : mapped[0].id))
+      })
+    }).catch(() => {})
+  }, [initialTabId])
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeId) || tabs[0],
