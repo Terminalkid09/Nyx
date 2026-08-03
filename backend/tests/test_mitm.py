@@ -303,6 +303,7 @@ class TestMitmWarnings:
         fake_engine.port = 8080
         fake_engine.mode = "regular"
         fake_engine.switch_to_transparent.return_value = (True, "ok")
+        fake_engine.transport_ready = True
 
         old_spoofer, old_dns, old_engine = (
             mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine)
@@ -331,6 +332,55 @@ class TestMitmWarnings:
 
             assert resp.status == "ok"
             assert "Windows Firewall rule" in resp.message
+        finally:
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine = old_spoofer, old_dns, old_engine
+            mitm_mod._redirect_active = old_redirect
+
+
+class TestMitmTransportGuard:
+    """Windows: starting spoofing without a working transparent transport must
+    be refused — otherwise ARP/DNS redirect target traffic into a blackhole
+    (looks like "Nyx blocks the internet") and cannot be stopped from the UI."""
+
+    @pytest.mark.asyncio
+    async def test_windows_start_refused_without_transport(self):
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from fastapi import HTTPException
+        from api.routes import mitm as mitm_mod
+
+        fake_engine = MagicMock()
+        fake_engine.port = 8080
+        fake_engine.mode = "regular"
+        fake_engine.switch_to_transparent.return_value = (True, "ok")
+        fake_engine.transport_ready = False
+
+        old_spoofer, old_dns, old_engine = (
+            mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine)
+        old_redirect = mitm_mod._redirect_active
+        try:
+            mitm_mod._spoofer = None
+            mitm_mod._dns_spoofer = None
+            mitm_mod._engine = fake_engine
+            mitm_mod._redirect_active = False
+
+            spoofer = MagicMock()
+            req = mitm_mod.MITMStartRequest(
+                target_ips=["192.168.1.100"],
+                gateway_ip="192.168.1.1",
+                enable_dns_spoof=True,
+            )
+            with patch.object(mitm_mod, "_is_admin", return_value=True), \
+                 patch.object(mitm_mod, "platform") as plat, \
+                 patch.object(mitm_mod, "ARPSpoofer", return_value=spoofer):
+                plat.system.return_value = "Windows"
+                with pytest.raises(HTTPException) as exc:
+                    await mitm_mod.mitm_start(req)
+            assert exc.value.status_code == 400
+            assert "Stealth Mode" in exc.value.detail
+            # Spoofers must NOT have been started (no blackhole).
+            assert mitm_mod._spoofer is None
+            assert mitm_mod._dns_spoofer is None
+            assert spoofer.start.call_count == 0
         finally:
             mitm_mod._spoofer, mitm_mod._dns_spoofer, mitm_mod._engine = old_spoofer, old_dns, old_engine
             mitm_mod._redirect_active = old_redirect

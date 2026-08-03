@@ -4,6 +4,7 @@ import {
   getMitmStatus,
   startMitm,
   stopMitm,
+  setTlsMitm,
   scanNetwork,
   MitmStatus,
   NetworkDevice,
@@ -26,6 +27,7 @@ import {
   HelpCircle,
   Activity,
   ExternalLink,
+  AlertTriangle,
 } from 'lucide-react'
 
 const statusColor = (ok: boolean) => (ok ? 'text-green-400' : 'text-red-400')
@@ -33,6 +35,10 @@ const bgStatus = (ok: boolean) =>
   ok
     ? 'bg-green-500/10 border-green-500/30'
     : 'bg-red-500/10 border-red-500/30'
+
+const scrollToStealth = () => {
+  document.getElementById('stealth')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 function getDeviceIcon(device: NetworkDevice) {
   const v = (device.vendor || '').toLowerCase()
@@ -72,6 +78,7 @@ export function MitmPage() {
   // Live backend status (transient — always polled)
   const [status, setStatus] = useState<MitmStatus & { captured_flows?: number } | null>(null)
   const [timeNow, setTimeNow] = useState<number>(Date.now())
+  const [tlsSaving, setTlsSaving] = useState(false)
 
   // All persistent UI state comes from the store
   const {
@@ -189,9 +196,27 @@ export function MitmPage() {
     if (e.key === 'Enter') addManualIp()
   }
 
+  const handleSetTls = async (active: boolean) => {
+    setTlsSaving(true)
+    setError(null)
+    try {
+      const res = await setTlsMitm(active)
+      setStatus((s) => ({ ...(s as any), tls_mitm: res.tls_mitm }))
+      await fetchStatus()
+    } catch (e: any) {
+      setError(
+        e.response?.data?.detail || e.message || 'Failed to toggle HTTPS decryption'
+      )
+    } finally {
+      setTlsSaving(false)
+    }
+  }
+
   const isActive = status?.active ?? false
+  const transportReady = status?.transport_ready ?? status?.redirect_active ?? false
   const targetIps = status?.target_ips ?? []
   const capturedFlows = (status as any)?.captured_flows ?? 0
+  const tlsEnabled = status?.tls_mitm !== false
   const lastTrafficSeen = (status as any)?.last_traffic_seen as string | null | undefined
   const trafficLastTs = lastTrafficSeen ? new Date(lastTrafficSeen).getTime() : 0
   // "Idle" = redirect/transport is up but no flow has been captured in the
@@ -199,6 +224,10 @@ export function MitmPage() {
   // "something is wrong" without claiming ACTIVE proves traffic works.
   const idleMs = trafficLastTs ? Math.max(0, timeNow - trafficLastTs) : (isActive ? Number.MAX_SAFE_INTEGER : 0)
   const trafficIdle = isActive && (capturedFlows === 0 || idleMs > 30000)
+  // Transport degraded = interception "on" but traffic can't reach the
+  // proxy automatically (WinDivert/pf failed) — the target phone would be
+  // blackholed, so the UI must say so instead of showing ACTIVE.
+  const transportDegraded = (status?.arp_spoofing || status?.dns_spoofing) && !transportReady
 
   return (
     <div className="p-6 h-full overflow-y-auto">
@@ -219,26 +248,54 @@ export function MitmPage() {
         {/* ── Error Banner ────────────────────────────────────────────────── */}
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-            {error}
+            <div className="flex items-start justify-between gap-3">
+              <span>{error}</span>
+              {error.includes('Stealth Mode') && (
+                <button
+                  onClick={scrollToStealth}
+                  className="shrink-0 text-xs px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-300 rounded-lg transition-colors"
+                >
+                  Go to Stealth Mode
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── HTTPS decryption info banner ─────────────────────────────────── */}
+        {status?.tls_mitm === false && (
+          <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm flex items-start gap-2">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+            <div>
+              <strong>HTTPS decryption is OFF.</strong> HTTPS traffic is
+              tunnelled untouched (plain HTTP proxy). Enable the{' '}
+              <em>Decrypt HTTPS</em> toggle below to intercept HTTPS — the
+              target device will need the Nyx CA installed on it (Deploy
+              Command) to browse without certificate warnings.
+            </div>
           </div>
         )}
 
         {/* ── Status Cards ────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div className={`p-4 rounded-lg border ${bgStatus(isActive)}`}>
+          <div className={`p-4 rounded-lg border ${transportDegraded ? bgStatus(false) : bgStatus(isActive)}`}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-gray-300">Status</span>
               <span
-                className={`text-sm font-bold ${statusColor(isActive)}`}
+                className={`text-sm font-bold ${
+                  transportDegraded
+                    ? 'text-amber-400'
+                    : statusColor(isActive)
+                }`}
               >
-                {isActive ? 'ACTIVE' : 'INACTIVE'}
+                {transportDegraded ? 'DEGRADED' : isActive ? 'ACTIVE' : 'INACTIVE'}
               </span>
             </div>
             <div className="space-y-1.5 text-xs">
               <div className="flex justify-between">
                 <span className="text-gray-400">MITM transport</span>
-                <span className={statusColor(isActive)}>
-                  {isActive ? 'UP' : 'DOWN'}
+                <span className={transportDegraded ? 'text-amber-400' : statusColor(transportReady)}>
+                  {transportReady ? 'UP' : transportDegraded ? 'BLOCKED' : 'DOWN'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -251,6 +308,17 @@ export function MitmPage() {
                 <span className="text-gray-400">DNS Spoofing</span>
                 <span className={statusColor(status?.dns_spoofing ?? false)}>
                   {status?.dns_spoofing ? 'ON' : 'OFF'}
+                </span>
+              </div>
+              {status?.dns_spoof_error && (
+                <div className="text-[10px] text-red-400 bg-red-500/10 rounded p-1.5">
+                  DNS spoofing failed: {status.dns_spoof_error}
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-gray-400">HTTPS decryption</span>
+                <span className={statusColor(status?.tls_mitm ?? true)}>
+                  {status?.tls_mitm === false ? 'OFF — passthrough' : 'ON'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -312,6 +380,31 @@ export function MitmPage() {
           </div>
         </div>
 
+        {/* ── Transport Degraded Warning ──────────────────────────────────── */}
+        {transportDegraded && (
+          <div className="p-5 rounded-lg border border-red-500/30 bg-red-500/5 mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle size={16} className="text-red-400" />
+              <h2 className="text-sm font-semibold text-red-400">
+                Transport not ready — targets will NOT reach the proxy
+              </h2>
+            </div>
+            <p className="text-xs text-gray-300 mb-2">
+              ARP/DNS spoofing is running but the transparent redirect
+              (WinDivert / pf) did not come up. Traffic from the target phone
+              will NOT be seen by Nyx — the device may even lose internet
+              access. Fix the transport (run Nyx as Administrator) or intercept
+              with Stealth Mode instead.
+            </p>
+            <button
+              onClick={() => scrollToStealth()}
+              className="text-xs px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-300 rounded-lg transition-colors"
+            >
+              Go to Stealth Mode
+            </button>
+          </div>
+        )}
+
         {/* ── Active: Captured Traffic Panel ──────────────────────────────── */}
         {isActive && (
           <div className="p-5 rounded-lg border border-green-500/30 bg-green-500/5 mb-6">
@@ -351,10 +444,13 @@ export function MitmPage() {
                 is being redirected through Nyx proxy.
               </p>
               <p>
-                Browse to{' '}
-                <span className="text-gray-200">http://</span> sites on the
+                Browse to any{' '}
+                <span className="text-gray-200">http://</span> or{' '}
+                <span className="text-gray-200">https://</span> site on the
                 target device to see captured requests in the{' '}
-                <span className="text-gray-200">Proxy</span> tab.
+                <span className="text-gray-200">Proxy</span> tab. HTTPS is
+                decrypted with the Nyx CA — install it on the target (Deploy
+                Command) to suppress certificate warnings.
               </p>
               {!status?.admin_mode && (
                 <p className="text-yellow-400 mt-2">
@@ -500,6 +596,37 @@ export function MitmPage() {
                         onClick={() => setEnableDns(false)}
                         className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
                           !enableDns
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-800 text-gray-400'
+                        }`}
+                      >
+                        OFF
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Decrypt HTTPS (TLS MITM) toggle — live, no proxy restart */}
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1.5">
+                      Decrypt HTTPS
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleSetTls(true)}
+                        disabled={tlsSaving}
+                        className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
+                          tlsEnabled
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-800 text-gray-400'
+                        }`}
+                      >
+                        ON
+                      </button>
+                      <button
+                        onClick={() => handleSetTls(false)}
+                        disabled={tlsSaving}
+                        className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
+                          !tlsEnabled
                             ? 'bg-purple-600 text-white'
                             : 'bg-gray-800 text-gray-400'
                         }`}
@@ -708,7 +835,7 @@ export function MitmPage() {
         )}
 
         {/* ── Stealth: manual proxy (no ARP spoofing) ───────────────────── */}
-        <div className="p-4 rounded-lg border border-gray-800 bg-gray-900/50 mb-6">
+        <div id="stealth" className="p-4 rounded-lg border border-gray-800 bg-gray-900/50 mb-6">
           <div className="flex items-center gap-2 mb-3">
             <Shield size={14} className="text-green-400" />
             <h3 className="text-sm font-semibold text-gray-200">

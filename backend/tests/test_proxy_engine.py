@@ -1,5 +1,22 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+
+class TestTlsMitmGate:
+    def test_gate_passthrough_when_disabled(self):
+        from core.proxy.addons.tls_gate import TlsMitmGate
+
+        gate = TlsMitmGate(enabled=False)
+        data = MagicMock()
+        gate.tls_clienthello(data)
+        assert data.ignore_connection is True
+
+    def test_gate_does_not_ignore_when_enabled(self):
+        from core.proxy.addons.tls_gate import TlsMitmGate
+
+        gate = TlsMitmGate(enabled=True)
+        data = type("ClientHelloData", (), {"ignore_connection": False})()
+        gate.tls_clienthello(data)
+        assert data.ignore_connection is False
 
 
 class TestProxyEngineSwitchMode:

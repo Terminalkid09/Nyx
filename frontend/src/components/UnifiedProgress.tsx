@@ -40,7 +40,11 @@ export function UnifiedProgress({
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const steps = pipeline?.steps || propSteps || []
+  const steps = Array.isArray(pipeline?.steps)
+    ? pipeline.steps
+    : pipeline?.steps
+      ? Object.keys(pipeline.steps)
+      : propSteps || []
   const currentStep = pipeline?.current_step || propCurrentStep || ''
   const progress = pipeline?.progress ?? propProgress ?? 0
   const status = pipeline?.status || propStatus || 'running'

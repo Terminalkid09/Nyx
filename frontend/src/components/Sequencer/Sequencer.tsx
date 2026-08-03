@@ -57,7 +57,27 @@ export function Sequencer() {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Resume capture after a tab switch: the backend capture keeps running, so
+  // re-check its status once a session is known and re-attach the polling.
+  useEffect(() => {
+    if (!selectedSession) return
+    apiClient
+      .get(`/api/sequencer/live/capturing/${selectedSession}`)
+      .then(({ data }) => {
+        if (data?.is_capturing) {
+          setIsCapturing(true)
+          fetchLiveTokens()
+          if (!pollRef.current) {
+            pollRef.current = setInterval(fetchLiveTokens, 2000)
+          }
+        }
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSession])
 
   const fetchSessions = async () => {
     try {

@@ -36,6 +36,19 @@ describe('DeployBox', () => {
     expect(pre.textContent).not.toContain('DownloadFile')
   })
 
+  it('emits a single-line command (no newlines) for every OS', async () => {
+    render(<DeployBox host="10.0.0.5" proxyPort={8080} />)
+    await waitFor(() => expect(screen.queryByText(/CA certificate embedded/)).not.toBeNull())
+    const osButtons = ['Windows', 'macOS', 'Linux / IoT', 'Android']
+    for (const label of osButtons) {
+      fireEvent.click(screen.getByText(label))
+      const pre = screen.getByText((c) => c.includes('http_proxy') || c.includes('Import-Certificate') || c.includes('networksetup') || c.includes('gsettings'))
+      // Single line: exactly one non-empty line, no \n characters.
+      expect(pre.textContent).not.toContain('\n')
+      expect((pre.textContent || '').split('\n').filter((l) => l.trim()).length).toBe(1)
+    }
+  })
+
   it('generates a macOS command with networksetup and embedded cert', async () => {
     render(<DeployBox host="10.0.0.5" proxyPort={8080} />)
     await waitFor(() => expect(screen.queryByText(/CA certificate embedded/)).not.toBeNull())
@@ -67,7 +80,7 @@ describe('DeployBox', () => {
   it('falls back to runtime download when the CA cannot be fetched', async () => {
     mockFetch()
     render(<DeployBox host="10.0.0.5" proxyPort={8080} caPort={18081} />)
-    await waitFor(() => expect(screen.queryByText(/sarà scaricato a runtime/)).not.toBeNull())
+    await waitFor(() => expect(screen.queryByText(/downloaded at runtime/)).not.toBeNull())
     const pre = screen.getByText((c) => c.includes('Import-Certificate'))
     expect(pre.textContent).toContain('DownloadFile')
     expect(pre.textContent).toContain('http://10.0.0.5:18081/api/ca-certificate')

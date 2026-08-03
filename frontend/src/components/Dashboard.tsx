@@ -90,6 +90,7 @@ export function Dashboard() {
   const navigate = useNavigate()
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [activePipelineId, setActivePipelineId] = useState<string | null>(null)
   const [recs, setRecs] = useState<Recommendation[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -111,6 +112,15 @@ export function Dashboard() {
 
   useEffect(() => {
     loadData()
+    // Resume an active pipeline after a tab switch: the orchestrator keeps
+    // running in the backend, so re-attach the progress widget to it.
+    apiClient.get('/api/pipeline')
+      .then((r) => {
+        const pipelines = Array.isArray(r.data) ? r.data : []
+        const running = pipelines.find((p: any) => p.status === 'running')
+        setActivePipelineId(running?.id || null)
+      })
+      .catch(() => {})
     pollingRef.current = setInterval(loadData, 8000)
     return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
   }, [activeSessionId])
@@ -194,6 +204,11 @@ export function Dashboard() {
             <span className="text-[10px] text-purple-400 animate-pulse ml-2">
               {activePipelines.length} scan{activePipelines.length > 1 ? 's' : ''} active
             </span>
+          )}
+          {activePipelineId && (
+            <div className="ml-2 w-40">
+              <UnifiedProgress pipelineId={activePipelineId} compact />
+            </div>
           )}
         </div>
         <div className="flex items-center gap-4">

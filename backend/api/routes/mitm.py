@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/mitm", tags=["mitm"])
 _engine: ProxyEngine | None = None
 _spoofer: ARPSpoofer | None = None
 _dns_spoofer: DNSSpoofer | None = None
+_dns_spoof_error: str | None = None
 _redirect_active = False
 _captured_request_count: int = 0
 
@@ -38,7 +39,8 @@ def init_mitm(engine: ProxyEngine):
 
 async def shutdown_mitm():
     """Release MITM resources at backend shutdown (firewall rules, redirects)."""
-    global _spoofer, _dns_spoofer, _redirect_active
+    global _spoofer, _dns_spoofer, _redirect_active, _dns_spoof_error
+    _dns_spoof_error = None
     if _dns_spoofer:
         await _dns_spoofer.stop()
         _dns_spoofer = None
@@ -418,7 +420,8 @@ async def scan_network():
 
 @router.post("/start", response_model=MITMStartResponse)
 async def mitm_start(req: MITMStartRequest):
-    global _spoofer, _dns_spoofer, _redirect_active
+    global _spoofer, _dns_spoofer, _redirect_active, _dns_spoof_error
+    _dns_spoof_error = None
 
     if _engine is None:
         raise HTTPException(status_code=500, detail="Proxy engine not initialized")
@@ -443,9 +446,33 @@ async def mitm_start(req: MITMStartRequest):
             logger.error("Failed to switch to transparent mode: %s", msg)
             raise HTTPException(500, detail=f"Failed to switch proxy to transparent mode: {msg}")
 
-    _redirect_active = True
+    _redirect_active = False
     if platform.system().lower() == "windows":
-        logger.info("WinDivert handles port redirection on Windows — no iptables redirect needed")
+        # WinDivert handles port redirection on Windows — the transport is
+        # only ready when mitmproxy actually loaded a transparent mode (i.e.
+        # WinDivert started with admin rights). Without it, ARP/DNS spoofing
+        # would redirect the target's traffic to this machine and then drop
+        # it (nobody listens on 80/443) — a silent blackhole that looks like
+        # "Nyx is blocking the internet". So we refuse to start spoofing when
+        # the transparent transport is not available.
+        transport_ready = getattr(_engine, "transport_ready", False)
+        if not transport_ready:
+            logger.warning(
+                "WinDivert transparent transport NOT ready — refusing to start "
+                "spoofing (would blackhole targets)."
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Transparent transport not ready (WinDivert requires "
+                    "Administrator privileges, or failed to start). Spoofing is "
+                    "disabled to avoid blocking the target's internet. Launch "
+                    "Nyx as Administrator, or use Stealth Mode (manual proxy on "
+                    "the target) which does NOT need WinDivert."
+                ),
+            )
+        _redirect_active = True
+        logger.info("WinDivert transparent transport ready — port redirection active")
         firewall_ok = False
         for p in {_engine.port, 8082}:
             if _ensure_windows_firewall(p):
@@ -479,14 +506,15 @@ async def mitm_start(req: MITMStartRequest):
         # Using "0.0.0.0" here was a bug — it caused the target to get
         # unreachable addresses instead of routing traffic through Nyx.
         local_ip = _get_local_ip()
-        _dns_spoofer = DNSSpoofer(spoof_ip=local_ip)
+        _dns_spoofer = DNSSpoofer(spoof_ip=local_ip, target_ips=req.target_ips)
         try:
             await _dns_spoofer.start()
             dns_active = True
-            logger.info("DNS spoofing active: all DNS queries -> %s", local_ip)
+            logger.info("DNS spoofing active: queries from %s -> %s", req.target_ips, local_ip)
         except Exception as e:
             logger.error("DNS spoofing failed to start: %s", e)
             _dns_spoofer = None
+            _dns_spoof_error = str(e)
             warnings.append("DNS spoofing failed to start.")
 
     if not admin:
@@ -510,7 +538,8 @@ async def mitm_start(req: MITMStartRequest):
 
 @router.post("/stop", response_model=MITMStopResponse)
 async def mitm_stop():
-    global _spoofer, _dns_spoofer, _redirect_active
+    global _spoofer, _dns_spoofer, _redirect_active, _dns_spoof_error
+    _dns_spoof_error = None
 
     if _dns_spoofer:
         await _dns_spoofer.stop()
@@ -559,14 +588,17 @@ async def mitm_status():
         except Exception:
             proxy_count = 0
     local_ip = _get_local_ip()
-    # "active" only when traffic is actually being redirected into Nyx —
-    # ARP/DNS merely being started as tasks isn't sufficient (e.g. a raw
-    # socket that failed to open, or iptables redirect that couldn't be set).
-    capture_working = _redirect_active and (arp_running or dns_running)
+    transport_ready = bool(_engine and getattr(_engine, "transport_ready", False))
+    # "active" = an interception session is currently running (spoofers live).
+    # This drives the UI's Start/Stop button — the user must always be able to
+    # stop, even if the transport is degraded.
+    session_active = bool(_spoofer is not None or _dns_spoofer is not None)
     return {
-        "active": capture_working,
+        "active": session_active,
+        "transport_ready": transport_ready,
         "arp_spoofing": arp_running,
         "dns_spoofing": dns_running,
+        "dns_spoof_error": _dns_spoof_error,
         "target_ips": _spoofer.target_ips if _spoofer else [],
         "gateway_ip": _spoofer.gateway_ip if _spoofer else None,
         "admin_mode": _is_admin(),
@@ -581,4 +613,24 @@ async def mitm_status():
         "local_ip": local_ip if local_ip != "127.0.0.1" else None,
         "proxy_host": _engine.host if _engine else None,
         "proxy_port": _engine.port if _engine else None,
+        # User-controlled: True = decrypt HTTPS with the Nyx CA (target must
+        # trust the CA via DeployBox); False = HTTPS tunnelled untouched, only
+        # plain HTTP is intercepted. Toggle via POST /api/mitm/tls.
+        "tls_mitm": _engine.tls_mitm if _engine else True,
     }
+
+
+class TLSSetting(BaseModel):
+    active: bool
+
+
+@router.post("/tls")
+async def mitm_set_tls(req: TLSSetting):
+    """Enable/disable HTTPS decryption live (no proxy restart needed)."""
+    from core.config import settings
+
+    settings.TLS_MITM = bool(req.active)
+    if _engine is not None:
+        _engine.tls_mitm = bool(req.active)
+        logger.info("TLS MITM set to %s by user", _engine.tls_mitm)
+    return {"tls_mitm": _engine.tls_mitm if _engine else bool(req.active)}

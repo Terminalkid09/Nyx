@@ -65,10 +65,7 @@ nyx_reports/
 
 # Desktop artifacts
 desktop/dist/
-desktop/dist_release/
-desktop/dist_old/
-desktop/dist_new/
-desktop/dist_old_bak/
+desktop/dist_*/
 desktop/build/
 desktop/build-output/
 desktop/release/

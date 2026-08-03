@@ -2,8 +2,10 @@ import { apiClient } from '../client'
 
 export interface MitmStatus {
   active: boolean
+  transport_ready?: boolean
   arp_spoofing: boolean
   dns_spoofing: boolean
+  dns_spoof_error?: string | null
   target_ips: string[]
   gateway_ip: string | null
   admin_mode: boolean
@@ -14,6 +16,7 @@ export interface MitmStatus {
   local_ip?: string | null
   proxy_host?: string | null
   proxy_port?: number | null
+  tls_mitm?: boolean
 }
 
 export interface NetworkDevice {
@@ -41,6 +44,11 @@ export async function startMitm(req: MitmStartRequest): Promise<void> {
 
 export async function stopMitm(): Promise<{ status: string }> {
   const { data } = await apiClient.post('/api/mitm/stop')
+  return data
+}
+
+export async function setTlsMitm(active: boolean): Promise<{ tls_mitm: boolean }> {
+  const { data } = await apiClient.post('/api/mitm/tls', { active })
   return data
 }
 

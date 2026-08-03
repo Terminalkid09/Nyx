@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { apiClient } from '../api/client'
+import { useJobsStore } from '../store/useJobsStore'
 
 interface DiscoveredItem {
   url: string
@@ -30,6 +31,7 @@ interface DiscoveryJob {
 }
 
 export function ContentDiscovery() {
+  const { jobs: storedJobs, setJob: storeJob, clearJob: clearStoredJob } = useJobsStore()
   const [targetUrl, setTargetUrl] = useState('')
   const [wordlist, setWordlist] = useState('')
   const [wordlists, setWordlists] = useState<string[]>([])
@@ -79,6 +81,7 @@ export function ContentDiscovery() {
         throttle_ms: throttle,
       })
       setJobId(data.job_id)
+      storeJob('content-discovery', data.job_id, 'pending')
       pollResults(data.job_id)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to start discovery')
@@ -99,6 +102,7 @@ export function ContentDiscovery() {
         if (data.status === 'done' || data.status === 'cancelled' || data.status === 'error') {
           if (pollRef.current) clearInterval(pollRef.current)
           setDiscovering(false)
+          clearStoredJob('content-discovery')
           setJobs([])
           apiClient.get('/api/content-discovery/jobs').then(({ data }) => setJobs(data)).catch(() => {})
         }
@@ -109,12 +113,37 @@ export function ContentDiscovery() {
     }, 2000)
   }
 
+  // Resume a still-running job after a tab switch.
+  useEffect(() => {
+    const saved = storedJobs['content-discovery']
+    if (saved && saved.id) {
+      setJobId(saved.id)
+      setDiscovering(true)
+      apiClient
+        .get<JobStatus>(`/api/content-discovery/status/${saved.id}`)
+        .then(({ data }) => {
+          setStatus(data.status)
+          setProgress({ completed: data.completed, total: data.total })
+          if (data.discovered && data.discovered.length > 0) setResults(data.discovered)
+          if (data.status === 'done' || data.status === 'cancelled' || data.status === 'error') {
+            clearStoredJob('content-discovery')
+            setDiscovering(false)
+          } else {
+            pollResults(saved.id)
+          }
+        })
+        .catch(() => clearStoredJob('content-discovery'))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const stopDiscovery = async () => {
     if (!jobId) return
     try {
       await apiClient.post(`/api/content-discovery/stop/${jobId}`)
       setStatus('cancelled')
       if (pollRef.current) clearInterval(pollRef.current)
+      clearStoredJob('content-discovery')
       setDiscovering(false)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to stop')

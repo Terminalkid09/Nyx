@@ -35,6 +35,8 @@ async def get_pipeline_status(pipeline_id: str, request: Request):
     result = pipeline.get_pipeline(pipeline_id)
     if not result:
         raise HTTPException(404, detail="Pipeline not found")
+    result = dict(result)
+    result["progress"] = pipeline._calc_overall_progress(result)
     return result
 
 

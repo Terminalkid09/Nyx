@@ -33,6 +33,7 @@ interface Extractor {
 }
 
 import { useFuzzerStore } from '../../store/useFuzzerStore'
+import { useJobsStore } from '../../store/useJobsStore'
 import { ProxyRequestPicker } from '../ProxyRequestPicker/ProxyRequestPicker'
 
 const DEFAULT_SESSION_ID = '00000000-0000-0000-0000-000000000001'
@@ -41,6 +42,7 @@ export function Fuzzer() {
   const requests = useProxyStore((s) => s.requests)
   const { activeSessionId } = useSessionStore()
   const { selectedReqId, template, setFuzzerTarget } = useFuzzerStore()
+  const { jobs: storedJobs, setJob: storeJob, clearJob: clearStoredJob } = useJobsStore()
   const location = useLocation()
   const navState = (location.state || {}) as Record<string, any>
   
@@ -195,6 +197,7 @@ export function Fuzzer() {
       })
       setJobId(job.id)
       setJobStatus(job.status)
+      storeJob('fuzzer', job.id, job.status)
       pollResults(job.id)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message)
@@ -214,6 +217,7 @@ export function Fuzzer() {
         if (job.status === 'done' || job.status === 'cancelled') {
           if (pollRef.current) clearInterval(pollRef.current)
           setLoading(false)
+          clearStoredJob('fuzzer')
         }
       } catch {
         if (pollRef.current) clearInterval(pollRef.current)
@@ -222,12 +226,37 @@ export function Fuzzer() {
     }, 1000)
   }
 
+  // Resume a still-running job after a tab switch: the backend job survives
+  // the unmount, so re-attach to it and keep polling instead of losing it.
+  useEffect(() => {
+    const saved = storedJobs.fuzzer
+    if (saved && saved.id) {
+      setJobId(saved.id)
+      setJobStatus(saved.status || 'running')
+      setLoading(true)
+      getFuzzJob(saved.id)
+        .then((job) => {
+          setJobStatus(job.status)
+          if (job.results && job.results.length > 0) setResults(job.results)
+          if (job.status === 'done' || job.status === 'cancelled') {
+            clearStoredJob('fuzzer')
+          } else {
+            pollResults(saved.id)
+          }
+        })
+        .catch(() => clearStoredJob('fuzzer'))
+        .finally(() => setLoading(false))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const cancel = async () => {
     if (!jobId) return
     try {
       await cancelFuzzJob(jobId)
       setJobStatus('cancelled')
       if (pollRef.current) clearInterval(pollRef.current)
+      clearStoredJob('fuzzer')
       setLoading(false)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message)

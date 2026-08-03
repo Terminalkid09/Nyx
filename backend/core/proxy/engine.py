@@ -225,6 +225,13 @@ class ProxyEngine:
         self._stopped = threading.Event()
         self._addons: list = []
         self._start_error: str | None = None
+        self.tls_mitm: bool = True
+        # Whether the *transparent* transport is actually working (WinDivert
+        # running on Windows, transparent mode loaded in mitmproxy). This is
+        # NOT assumed by intent: it only becomes True when the machinery
+        # really started. False here means traffic will not reach the proxy
+        # automatically and the UI should suggest manual proxy (Stealth).
+        self.transport_ready: bool = False
 
     def register_addon(self, addon):
         self._addons.append(addon)
@@ -320,6 +327,17 @@ class ProxyEngine:
             ignore_hosts=settings.proxy_ignore_hosts
             + [r"^ws\.telemetry\.(samsungapps|samsung|samsungmobile)\.com$"],
         )
+        # Transparent transport is really ready only when a transparent mode
+        # made it into the loaded mitmproxy modes (i.e. WinDivert started on
+        # Windows — otherwise we fell back to regular and phones won't reach
+        # the proxy).
+        self.transport_ready = any(m.startswith("transparent") for m in mitm_mode)
+        if self.mode in ("transparent", "both") and not self.transport_ready:
+            logger.warning(
+                "Transparent transport NOT ready — proxy running regular only. "
+                "Traffic from target devices will not reach the proxy unless "
+                "they use a manual proxy (Stealth Mode)."
+            )
         try:
             self._master = DumpMaster(options)
         except OSError as e:
@@ -334,8 +352,24 @@ class ProxyEngine:
             return
         from core.proxy.addons.logger import LoggerAddon
         from core.proxy.addons.stealth import StealthAddon
+        from core.proxy.addons.tls_gate import TlsMitmGate
+
+        # TLS MITM is a user-controlled setting (default ON). Unlike a
+        # hard gate tied to the local trust store, we always decrypt HTTPS
+        # when the operator enables it — the target device must trust the
+        # Nyx CA (DeployBox) to avoid cert warnings, exactly like Burp.
+        # The local machine's trust store is irrelevant for device MITM.
+        self.tls_mitm = bool(settings.TLS_MITM)
+        if not self.tls_mitm:
+            logger.warning(
+                "TLS_MITM=%s — HTTPS will be passed through without decryption "
+                "(plain HTTP proxy only). Enable 'Decrypt HTTPS' in the MITM page.",
+                settings.TLS_MITM,
+            )
+
         self._master.addons.add(LoggerAddon(self, max_body_size=settings.MAX_BODY_SIZE_BYTES))
         self._master.addons.add(StealthAddon())
+        self._master.addons.add(TlsMitmGate(enabled=self.tls_mitm))
         for addon in self._addons:
             self._master.addons.add(addon)
         await self._master.run()

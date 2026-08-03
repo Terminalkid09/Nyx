@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
+﻿const { app, BrowserWindow, dialog, ipcMain, session, screen } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -8,6 +8,7 @@ const os = require('os');
 
 const PID_FILE = path.join(os.tmpdir(), 'nyx-backend.pid');
 const COLLAB_PID_FILE = path.join(os.tmpdir(), 'nyx-collaborator.pid');
+const WINDOW_STATE_FILE = path.join(app.getPath('userData'), 'window-state.json');
 
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -256,6 +257,55 @@ function pollHealth(retries = 90) {
   });
 }
 
+// Remember the main window position/size between launches so the app does
+// not force its own geometry every startup.
+function loadWindowState() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(WINDOW_STATE_FILE, 'utf8'));
+    if (!saved || typeof saved.width !== 'number' || typeof saved.height !== 'number') return {};
+    const visible = screen.getAllDisplays().some((d) => {
+      const a = d.workArea;
+      const x = saved.x ?? a.x;
+      const y = saved.y ?? a.y;
+      const intersects =
+        x < a.x + a.width && x + saved.width > a.x &&
+        y < a.y + a.height && y + saved.height > a.y;
+      return intersects || (saved.x === undefined && saved.y === undefined);
+    });
+    if (!visible) return {};
+    return { width: saved.width, height: saved.height, x: saved.x, y: saved.y };
+  } catch {
+    return {};
+  }
+}
+
+function saveWindowState(win) {
+  const bounds = win.getBounds();
+  const data = { width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y };
+  try {
+    fs.writeFileSync(WINDOW_STATE_FILE, JSON.stringify(data), 'utf8');
+  } catch {}
+}
+
+function trackWindowState(win) {
+  if (!win) return;
+  let timer = null;
+  const persist = () => {
+    if (win.isDestroyed()) return;
+    saveWindowState(win);
+  };
+  const debounced = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(persist, 400);
+  };
+  win.on('resize', debounced);
+  win.on('move', debounced);
+  win.on('close', () => {
+    if (timer) clearTimeout(timer);
+    persist();
+  });
+}
+
 function showLoading() {
   loadingWindow = new BrowserWindow({
     width: 420, height: 320, frame: true, transparent: false,
@@ -277,8 +327,12 @@ function showLoading() {
 }
 
 function createMainWindow() {
+  const state = loadWindowState();
   mainWindow = new BrowserWindow({
-    width: 1280, height: 800,
+    width: state.width || 1280,
+    height: state.height || 800,
+    x: state.x,
+    y: state.y,
     title: 'Nyx \u2014 Security Testing Suite',
     autoHideMenuBar: true,
     backgroundColor: '#030712',
@@ -291,6 +345,8 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+
+  trackWindowState(mainWindow);
 
   mainWindow.loadURL('http://127.0.0.1:8000');
 
@@ -351,6 +407,7 @@ async function launchBrowser() {
 
   // Check if proxy capture is active
   let useProxy = false;
+  let tlsMitm = true; // TLS MITM forced (CA trusted) — decrypt HTTPS
   try {
     const resp = await new Promise((resolve, reject) => {
       const req = http.get('http://127.0.0.1:8000/api/proxy/capture', { timeout: 3000 }, (res) => {
@@ -364,14 +421,22 @@ async function launchBrowser() {
       req.setTimeout(3000, () => { req.destroy(); reject(new Error('Timeout')); });
     });
     useProxy = resp.capture_active === true;
+    tlsMitm = resp.tls_mitm !== false;
   } catch (err) {
     console.error('Failed to check proxy capture status:', err);
   }
 
   if (useProxy) {
     try {
+      // When TLS MITM is active (CA trusted) route both http+https through the
+      // proxy so HTTPS is decrypted. When the CA is NOT in the trust store we
+      // must NOT force TLS MITM: route only http through the proxy and let
+      // https go direct — otherwise every HTTPS page throws a cert alert.
+      const rules = tlsMitm
+        ? 'http=127.0.0.1:8080;https=127.0.0.1:8080'
+        : 'http=127.0.0.1:8080';
       await ses.setProxy({
-        proxyRules: 'http=127.0.0.1:8080;https=127.0.0.1:8080',
+        proxyRules: rules,
         proxyBypassRules: '<local>',
       });
     } catch (err) {
