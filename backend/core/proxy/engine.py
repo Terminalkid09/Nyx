@@ -404,7 +404,6 @@ class ProxyEngine:
         from core.proxy.addons.stealth import StealthAddon
         from core.proxy.addons.tls_gate import TlsMitmGate
 
-<<<<<<< HEAD
         # TLS MITM is a user-controlled setting (default ON). Unlike a
         # hard gate tied to the local trust store, we always decrypt HTTPS
         # when the operator enables it — the target device must trust the
