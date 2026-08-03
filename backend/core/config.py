@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     PROXY_MODE: str = "regular"
     DEBUG: bool = False
 
+    # When False (or when the Nyx CA is NOT installed in the local OS trust
+    # store), the proxy stops forcing TLS MITM: HTTPS flows are tunnelled
+    # untouched (CONNECT passthrough) and only plain-HTTP traffic is
+    # intercepted. This prevents the certificate-alert loop seen on target
+    # devices when the CA cannot be trusted yet.
+    TLS_MITM: bool = True
+
     # Hosts that are never MITM'd — traffic to them is tunneled untouched.
     # These are OS vendor connectivity/telemetry endpoints that, when
     # intercepted, trigger "captive portal" / "untrusted network" alerts on

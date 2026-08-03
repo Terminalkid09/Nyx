@@ -36,6 +36,19 @@ describe('DeployBox', () => {
     expect(pre.textContent).not.toContain('DownloadFile')
   })
 
+  it('emits a single-line command (no newlines) for every OS', async () => {
+    render(<DeployBox host="10.0.0.5" proxyPort={8080} />)
+    await waitFor(() => expect(screen.queryByText(/CA certificate embedded/)).not.toBeNull())
+    const osButtons = ['Windows', 'macOS', 'Linux / IoT', 'Android']
+    for (const label of osButtons) {
+      fireEvent.click(screen.getByText(label))
+      const pre = screen.getByText((c) => c.includes('http_proxy') || c.includes('Import-Certificate') || c.includes('networksetup') || c.includes('gsettings'))
+      // Single line: exactly one non-empty line, no \n characters.
+      expect(pre.textContent).not.toContain('\n')
+      expect((pre.textContent || '').split('\n').filter((l) => l.trim()).length).toBe(1)
+    }
+  })
+
   it('generates a macOS command with networksetup and embedded cert', async () => {
     render(<DeployBox host="10.0.0.5" proxyPort={8080} />)
     await waitFor(() => expect(screen.queryByText(/CA certificate embedded/)).not.toBeNull())

@@ -581,4 +581,7 @@ async def mitm_status():
         "local_ip": local_ip if local_ip != "127.0.0.1" else None,
         "proxy_host": _engine.host if _engine else None,
         "proxy_port": _engine.port if _engine else None,
+        # False when TLS MITM is disabled (CA not in OS trust store): HTTPS is
+        # tunnelled untouched, only plain HTTP is intercepted.
+        "tls_mitm": _engine.tls_mitm if _engine else True,
     }

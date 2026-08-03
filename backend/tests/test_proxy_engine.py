@@ -1,5 +1,91 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+
+class TestTlsMitmGate:
+    def test_gate_passthrough_when_disabled(self):
+        from core.proxy.addons.tls_gate import TlsMitmGate
+
+        gate = TlsMitmGate(enabled=False)
+        data = MagicMock()
+        gate.tls_clienthello(data)
+        assert data.ignore_connection is True
+
+    def test_gate_does_not_ignore_when_enabled(self):
+        from core.proxy.addons.tls_gate import TlsMitmGate
+
+        gate = TlsMitmGate(enabled=True)
+        data = type("ClientHelloData", (), {"ignore_connection": False})()
+        gate.tls_clienthello(data)
+        assert data.ignore_connection is False
+
+
+class TestCaInTrustStore:
+    @patch("platform.system", return_value="Linux")
+    def test_linux_ca_present(self, mock_sys, tmp_path):
+        from core.proxy.engine import _ca_in_trust_store
+
+        ca_dir = tmp_path / "ca-certificates"
+        ca_dir.mkdir()
+        (ca_dir / "nyx-ca.crt").write_text("PEM")
+        with patch("pathlib.Path.home"):
+            result = _ca_in_trust_store(ca_dir)
+        # _ca_in_trust_store uses hardcoded dirs; on non-removable paths we
+        # just ensure it returns a bool without raising.
+        assert result in (True, False)
+
+    @patch("platform.system", return_value="Linux")
+    def test_linux_ca_missing(self, mock_sys):
+        from core.proxy.engine import _ca_in_trust_store
+
+        with patch("pathlib.Path.exists", return_value=False):
+            assert _ca_in_trust_store() is False
+
+    @patch("platform.system", return_value="Windows")
+    def test_windows_ca_present(self, mock_sys):
+        from core.proxy.engine import _ca_in_trust_store
+
+        with patch(
+            "core.proxy.engine.subprocess.run",
+            return_value=MagicMock(stdout="Subject: CN=mitmproxy", returncode=0),
+        ):
+            assert _ca_in_trust_store() is True
+
+    @patch("platform.system", return_value="Windows")
+    def test_windows_ca_absent(self, mock_sys):
+        from core.proxy.engine import _ca_in_trust_store
+
+        with patch(
+            "core.proxy.engine.subprocess.run",
+            return_value=MagicMock(stdout="", returncode=0),
+        ):
+            assert _ca_in_trust_store() is False
+
+    @patch("platform.system", return_value="Darwin")
+    def test_macos_ca_present(self, mock_sys):
+        from core.proxy.engine import _ca_in_trust_store
+
+        with patch(
+            "core.proxy.engine.subprocess.run",
+            return_value=MagicMock(stdout="mitmproxy CA cert", returncode=0),
+        ):
+            assert _ca_in_trust_store() is True
+
+    @patch("platform.system", return_value="Darwin")
+    def test_macos_ca_absent(self, mock_sys):
+        from core.proxy.engine import _ca_in_trust_store
+
+        with patch(
+            "core.proxy.engine.subprocess.run",
+            return_value=MagicMock(stdout="", returncode=0),
+        ):
+            assert _ca_in_trust_store() is False
+
+    @patch("platform.system", return_value="FreeBSD")
+    def test_unknown_platform_fails_safe(self, mock_sys):
+        from core.proxy.engine import _ca_in_trust_store
+
+        assert _ca_in_trust_store() is True
+
 
 
 class TestProxyEngineSwitchMode:

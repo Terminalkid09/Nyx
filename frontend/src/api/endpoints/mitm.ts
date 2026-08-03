@@ -14,6 +14,7 @@ export interface MitmStatus {
   local_ip?: string | null
   proxy_host?: string | null
   proxy_port?: number | null
+  tls_mitm?: boolean
 }
 
 export interface NetworkDevice {

@@ -16,8 +16,8 @@ def init_proxy(engine: ProxyEngine):
 @router.get("/capture")
 async def get_capture_status():
     if not _engine:
-        return {"capture_active": True}
-    return {"capture_active": _engine.capture_active}
+        return {"capture_active": True, "tls_mitm": True}
+    return {"capture_active": _engine.capture_active, "tls_mitm": _engine.tls_mitm}
 
 
 class CaptureToggle(BaseModel):

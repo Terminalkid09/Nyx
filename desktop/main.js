@@ -351,6 +351,7 @@ async function launchBrowser() {
 
   // Check if proxy capture is active
   let useProxy = false;
+  let tlsMitm = true; // TLS MITM forced (CA trusted) — decrypt HTTPS
   try {
     const resp = await new Promise((resolve, reject) => {
       const req = http.get('http://127.0.0.1:8000/api/proxy/capture', { timeout: 3000 }, (res) => {
@@ -364,14 +365,22 @@ async function launchBrowser() {
       req.setTimeout(3000, () => { req.destroy(); reject(new Error('Timeout')); });
     });
     useProxy = resp.capture_active === true;
+    tlsMitm = resp.tls_mitm !== false;
   } catch (err) {
     console.error('Failed to check proxy capture status:', err);
   }
 
   if (useProxy) {
     try {
+      // When TLS MITM is active (CA trusted) route both http+https through the
+      // proxy so HTTPS is decrypted. When the CA is NOT in the trust store we
+      // must NOT force TLS MITM: route only http through the proxy and let
+      // https go direct — otherwise every HTTPS page throws a cert alert.
+      const rules = tlsMitm
+        ? 'http=127.0.0.1:8080;https=127.0.0.1:8080'
+        : 'http=127.0.0.1:8080';
       await ses.setProxy({
-        proxyRules: 'http=127.0.0.1:8080;https=127.0.0.1:8080',
+        proxyRules: rules,
         proxyBypassRules: '<local>',
       });
     } catch (err) {

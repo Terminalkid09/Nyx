@@ -26,6 +26,7 @@ import {
   HelpCircle,
   Activity,
   ExternalLink,
+  AlertTriangle,
 } from 'lucide-react'
 
 const statusColor = (ok: boolean) => (ok ? 'text-green-400' : 'text-red-400')
@@ -223,6 +224,19 @@ export function MitmPage() {
           </div>
         )}
 
+        {/* ── TLS MITM disabled alert ──────────────────────────────────────── */}
+        {status?.tls_mitm === false && (
+          <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm flex items-start gap-2">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+            <div>
+              <strong>TLS MITM disabled.</strong> The Nyx CA is not in the OS
+              trust store, so HTTPS traffic is tunnelled untouched (plain
+              HTTP proxy). Install the CA on this machine (Download CA →
+              import in system store) and restart the proxy to decrypt HTTPS.
+            </div>
+          </div>
+        )}
+
         {/* ── Status Cards ────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <div className={`p-4 rounded-lg border ${bgStatus(isActive)}`}>
@@ -251,6 +265,12 @@ export function MitmPage() {
                 <span className="text-gray-400">DNS Spoofing</span>
                 <span className={statusColor(status?.dns_spoofing ?? false)}>
                   {status?.dns_spoofing ? 'ON' : 'OFF'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">TLS MITM (HTTPS decryption)</span>
+                <span className={statusColor(status?.tls_mitm ?? true)}>
+                  {status?.tls_mitm === false ? 'OFF — passthrough' : 'ON'}
                 </span>
               </div>
               <div className="flex justify-between">
