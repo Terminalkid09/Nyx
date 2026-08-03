@@ -144,7 +144,7 @@ export function DeployBox({ host, proxyPort, caPort }: DeployBoxProps) {
         </h3>
       </div>
       <p className="text-xs text-gray-400 mb-3 leading-relaxed">
-        Single-line command to run on the remote system via the beacon: it
+Single-line command to run on the remote system via the beacon: it
         installs the Nyx CA and points the system proxy at{' '}
         <span className="font-mono text-gray-200">{proxy}</span>. Replace{' '}
         {'NYX-IP'} with the reachable IP/domain of the Nyx backend if the

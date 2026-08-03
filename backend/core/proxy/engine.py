@@ -5,12 +5,62 @@ import socket
 import subprocess
 import threading
 import time
+from pathlib import Path
 from mitmproxy.tools.dump import DumpMaster
 from mitmproxy.options import Options
 from core.events.bus import EventBus
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _ca_in_trust_store(ca_path: str | Path | None = None) -> bool:
+    """Best-effort check whether the Nyx/mitmproxy CA is installed in the OS trust store.
+
+    Windows: looks for a cert whose subject contains 'mitmproxy' in the
+    CurrentUser/LocalMachine Root store.
+    macOS:   uses ``security find-certificate`` against the login/system chain.
+    Linux:   checks whether the CA was copied into /usr/local/share/ca-certificates
+             (the standard location ``update-ca-certificates`` reads).
+
+    Returns True when the CA is present or when detection is inconclusive
+    (fails safe: we never silently disable TLS MITM on an unknown platform).
+    """
+    if platform.system().lower() == "windows":
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-ChildItem -Path Cert:\\LocalMachine\\Root, Cert:\\CurrentUser\\Root "
+                 "-ErrorAction SilentlyContinue | Where-Object { $_.Subject -match 'mitmproxy' }"],
+                capture_output=True, text=True, timeout=10,
+            )
+            # certutil-compatible: any output row means the CA subject is present.
+            return "mitmproxy" in out.stdout.lower()
+        except Exception as e:
+            logger.debug("CA trust check (Windows) inconclusive: %s", e)
+            return True
+    if platform.system().lower() == "darwin":
+        try:
+            out = subprocess.run(
+                ["security", "find-certificate", "-a", "-c", "mitmproxy"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return "mitmproxy" in out.stdout.lower() or "mitmproxy" in out.stderr.lower()
+        except Exception as e:
+            logger.debug("CA trust check (macOS) inconclusive: %s", e)
+            return True
+    if platform.system().lower() == "linux":
+        dirs = [Path("/usr/local/share/ca-certificates"), Path("/etc/ssl/certs")]
+        for d in dirs:
+            try:
+                if d.exists():
+                    entries = [p.name.lower() for p in d.iterdir() if p.is_file()]
+                    if any("mitmproxy" in name or "nyx" in name for name in entries):
+                        return True
+            except Exception as e:
+                logger.debug("CA trust check (Linux) inconclusive: %s", e)
+        return False
+    return True
 
 
 def _setup_linux(proxy_port: int, enable: bool) -> list[str]:
@@ -354,6 +404,7 @@ class ProxyEngine:
         from core.proxy.addons.stealth import StealthAddon
         from core.proxy.addons.tls_gate import TlsMitmGate
 
+<<<<<<< HEAD
         # TLS MITM is a user-controlled setting (default ON). Unlike a
         # hard gate tied to the local trust store, we always decrypt HTTPS
         # when the operator enables it — the target device must trust the
