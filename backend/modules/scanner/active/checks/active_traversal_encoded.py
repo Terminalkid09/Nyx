@@ -24,21 +24,20 @@ class ActiveTraversalEncodedCheck(BaseCheck):
                     modified = dict(base_request)
                     parsed = urlparse(modified["url"])
                     params = dict(parse_qsl(parsed.query))
-                    if param in params:
-                        params[param] = payload
-                        modified["url"] = parsed._replace(query=urlencode(params)).geturl()
-                        try:
-                            resp = await client.request(**modified)
-                            if "root:x:0:0:" in resp.text or "root:" in resp.text[:2000]:
-                                results.append(CheckResult(
-                                    triggered=True,
-                                    severity="critical",
-                                    title=f"Encoded Path Traversal ({encoding_name})",
-                                    description=f"Parameter '{param}' vulnerable to encoded path traversal.",
-                                    evidence=f"Encoding: {encoding_name}\nPayload: {payload}",
-                                    remediation="Normalize and validate paths. Reject encoded traversal sequences. Use a mapping for file access.",
-                                    cwe="CWE-22",
-                                ))
-                        except Exception:
-                            continue
+                    params[param] = payload
+                    modified["url"] = parsed._replace(query=urlencode(params)).geturl()
+                    try:
+                        resp = await client.request(**modified)
+                        if "root:x:0:0:" in resp.text or "root:" in resp.text[:2000]:
+                            results.append(CheckResult(
+                                triggered=True,
+                                severity="critical",
+                                title=f"Encoded Path Traversal ({encoding_name})",
+                                description=f"Parameter '{param}' vulnerable to encoded path traversal.",
+                                evidence=f"Encoding: {encoding_name}\nPayload: {payload}",
+                                remediation="Normalize and validate paths. Reject encoded traversal sequences. Use a mapping for file access.",
+                                cwe="CWE-22",
+                            ))
+                    except Exception:
+                        continue
         return results

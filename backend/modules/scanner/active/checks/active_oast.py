@@ -181,7 +181,6 @@ class ActiveOastCheck(BaseCheck):
         req = copy.deepcopy(base)
         parsed = urlparse(req["url"])
         params = dict(parse_qsl(parsed.query))
-        if param in params:
-            params[param] = payload
-            req["url"] = parsed._replace(query=urlencode(params)).geturl()
+        params[param] = payload
+        req["url"] = parsed._replace(query=urlencode(params)).geturl()
         return req

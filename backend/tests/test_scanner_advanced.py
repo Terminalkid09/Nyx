@@ -20,11 +20,14 @@ class TestActiveSqliBlind:
         assert "1'='1" in decoded
 
     def test_inject_payload_param_not_present(self):
+        # A param missing from the base URL must be ADDED, not skipped —
+        # otherwise checks silently no-op on discovered params.
         from modules.scanner.active.checks.active_sqli_blind import ActiveSqliBlindCheck
         check = ActiveSqliBlindCheck()
         base = {"url": "http://example.com/page?id=1", "method": "GET"}
         modified = check._inject_payload(base, "nonexistent", "payload")
-        assert base["url"] == modified["url"]  # unchanged
+        assert "nonexistent=payload" in modified["url"]
+        assert "id=1" in modified["url"]  # existing params preserved
 
     def test_blind_pairs_structure(self):
         from modules.scanner.active.checks.active_sqli_blind import BLIND_PAIRS

@@ -24,23 +24,22 @@ class ActiveDomXssCheck(BaseCheck):
                 modified = dict(base_request)
                 parsed = urlparse(modified["url"])
                 params = dict(parse_qsl(parsed.query))
-                if param in params:
-                    params[param] = "dom_xss_test_12345"
-                    modified["url"] = parsed._replace(query=urlencode(params)).geturl()
-                    try:
-                        resp = await client.request(**modified)
-                        body_lower = resp.text.lower()
-                        for source in DOM_XSS_SOURCES:
-                            if source.lower() in body_lower:
-                                results.append(CheckResult(
-                                    triggered=True,
-                                    severity="high",
-                                    title="Potential DOM-based XSS",
-                                    description=f"Parameter '{param}' may flow into DOM XSS sink via {source}.",
-                                    evidence=f"DOM source: {source}",
-                                    remediation="Avoid writing user input directly to innerHTML, document.write, or eval. Use textContent or sanitizers.",
-                                    cwe="CWE-79",
-                                ))
-                    except Exception:
-                        continue
+                params[param] = "dom_xss_test_12345"
+                modified["url"] = parsed._replace(query=urlencode(params)).geturl()
+                try:
+                    resp = await client.request(**modified)
+                    body_lower = resp.text.lower()
+                    for source in DOM_XSS_SOURCES:
+                        if source.lower() in body_lower:
+                            results.append(CheckResult(
+                                triggered=True,
+                                severity="high",
+                                title="Potential DOM-based XSS",
+                                description=f"Parameter '{param}' may flow into DOM XSS sink via {source}.",
+                                evidence=f"DOM source: {source}",
+                                remediation="Avoid writing user input directly to innerHTML, document.write, or eval. Use textContent or sanitizers.",
+                                cwe="CWE-79",
+                            ))
+                except Exception:
+                    continue
         return results

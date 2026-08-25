@@ -28,23 +28,22 @@ class ActiveSstiBlindCheck(BaseCheck):
                     modified = dict(base_request)
                     parsed = urlparse(modified["url"])
                     params = dict(parse_qsl(parsed.query))
-                    if param in params:
-                        params[param] = payload
-                        modified["url"] = parsed._replace(query=urlencode(params)).geturl()
-                        try:
-                            resp = await client.request(**modified)
-                            for indicator in SSTI_SUCCESS_INDICATORS:
-                                if indicator in resp.text:
-                                    results.append(CheckResult(
-                                        triggered=True,
-                                        severity="critical",
-                                        title=f"Server-Side Template Injection ({engine_name})",
-                                        description=f"Parameter '{param}' is vulnerable to {engine_name} SSTI.",
-                                        evidence=f"Engine: {engine_name}\nPayload: {payload}\nIndicator: {indicator}",
-                                        remediation="Do not render user input as templates. Use sandboxed template engines if necessary.",
-                                        cwe="CWE-94",
-                                    ))
-                                    break
-                        except Exception:
-                            continue
+                    params[param] = payload
+                    modified["url"] = parsed._replace(query=urlencode(params)).geturl()
+                    try:
+                        resp = await client.request(**modified)
+                        for indicator in SSTI_SUCCESS_INDICATORS:
+                            if indicator in resp.text:
+                                results.append(CheckResult(
+                                    triggered=True,
+                                    severity="critical",
+                                    title=f"Server-Side Template Injection ({engine_name})",
+                                    description=f"Parameter '{param}' is vulnerable to {engine_name} SSTI.",
+                                    evidence=f"Engine: {engine_name}\nPayload: {payload}\nIndicator: {indicator}",
+                                    remediation="Do not render user input as templates. Use sandboxed template engines if necessary.",
+                                    cwe="CWE-94",
+                                ))
+                                break
+                    except Exception:
+                        continue
         return results

@@ -23,21 +23,20 @@ class ActiveLog4shellCheck(BaseCheck):
                     modified = dict(base_request)
                     parsed = urlparse(modified["url"])
                     params = dict(parse_qsl(parsed.query))
-                    if param in params:
-                        params[param] = payload
-                        modified["url"] = parsed._replace(query=urlencode(params)).geturl()
-                        try:
-                            resp = await client.request(**modified)
-                            if resp.status_code in (500, 502) or "${" in resp.text:
-                                results.append(CheckResult(
-                                    triggered=True,
-                                    severity="critical",
-                                    title="Log4Shell Vulnerability (CVE-2021-44228)",
-                                    description=f"Parameter '{param}' may be vulnerable to Log4Shell JNDI injection.",
-                                    evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
-                                    remediation="Update Log4j to 2.17.0+. Set log4j2.formatMsgNoLookups=true. Apply CVE-2021-44228 patches.",
-                                    cwe="CWE-917",
-                                ))
-                        except Exception:
-                            continue
+                    params[param] = payload
+                    modified["url"] = parsed._replace(query=urlencode(params)).geturl()
+                    try:
+                        resp = await client.request(**modified)
+                        if resp.status_code in (500, 502) or "${" in resp.text:
+                            results.append(CheckResult(
+                                triggered=True,
+                                severity="critical",
+                                title="Log4Shell Vulnerability (CVE-2021-44228)",
+                                description=f"Parameter '{param}' may be vulnerable to Log4Shell JNDI injection.",
+                                evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
+                                remediation="Update Log4j to 2.17.0+. Set log4j2.formatMsgNoLookups=true. Apply CVE-2021-44228 patches.",
+                                cwe="CWE-917",
+                            ))
+                    except Exception:
+                        continue
         return results
