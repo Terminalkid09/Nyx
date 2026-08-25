@@ -89,10 +89,13 @@ The Dashboard shows real-time security testing stats.
 For intercepting traffic from other devices:
 
 1. Go to **MITM** from the sidebar
-2. Set **Target IP** (e.g., phone on same WiFi)
+2. **Scan Network** (or type the **Target IP**, e.g. phone on same WiFi)
 3. Set **Gateway IP** (your router)
-4. Enable **DNS Spoof**
-5. Click **Start**
+4. Choose the interception method: **Auto** (default) = rogue DHCP first (stealth, no "suspicious network" alert), with automatic **ARP fallback** if DHCP does not convert within ~20s; **ARP** = instant spoofing but the target may show a "suspicious network" alert; **DHCP** = rogue DHCP only
+5. Enable **DNS Spoof** if needed
+6. Click **Start**
+
+> **💡 Already-connected target?** A Wi-Fi toggle only renews the old lease directly with the router (Nyx never sees it). Ask the target to **"forget the network"** and rejoin, or wait for the automatic ARP fallback. During the DHCP phase Nyx also NAKs the target's renewals to force it back to DISCOVER.
 
 ### View Captured Traffic
 
