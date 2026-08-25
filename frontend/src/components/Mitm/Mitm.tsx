@@ -6,11 +6,15 @@ import {
   stopMitm,
   setTlsMitm,
   scanNetwork,
+  removeCaFromHost,
   MitmStatus,
   NetworkDevice,
 } from '../../api/endpoints/mitm'
 import { useMitmStore } from '../../store/useMitmStore'
 import { DeployBox } from './DeployBox'
+import { DhcpStatusPanel } from './DhcpStatusPanel'
+import { ActivityMonitor } from './ActivityMonitor'
+import { TrafficDiagnosticsPanel } from './TrafficDiagnosticsPanel'
 import {
   Shield,
   Play,
@@ -80,12 +84,19 @@ export function MitmPage() {
   const [timeNow, setTimeNow] = useState<number>(Date.now())
   const [tlsSaving, setTlsSaving] = useState(false)
 
+  // CA removal from THIS PC (post-test cleanup)
+  const [caRemoving, setCaRemoving] = useState(false)
+  const [caRemoveMsg, setCaRemoveMsg] = useState<string | null>(null)
+
   // All persistent UI state comes from the store
   const {
     devices,
     selectedIps,
     gatewayIp,
     enableDns,
+    spoofMethod,
+    arpMode,
+    enableWifiAp,
     scanning,
     scanAttempted,
     loading,
@@ -99,6 +110,9 @@ export function MitmPage() {
     removeIp,
     setGatewayIp,
     setEnableDns,
+    setSpoofMethod,
+    setArpMode,
+    setEnableWifiAp,
     setScanning,
     setScanAttempted,
     setLoading,
@@ -110,8 +124,8 @@ export function MitmPage() {
   const fetchStatus = useCallback(async () => {
     try {
       const s = await getMitmStatus()
-      setStatus(s as any)
-      if ((s as any).gateway_ip) setGatewayIp((s as any).gateway_ip)
+      setStatus(s)
+      if (s.gateway_ip) setGatewayIp(s.gateway_ip)
     } catch {
       /* ignore */
     }
@@ -159,6 +173,9 @@ export function MitmPage() {
         target_ips: Array.from(selectedIps),
         gateway_ip: gatewayIp,
         enable_dns_spoof: enableDns,
+        spoof_method: spoofMethod as 'auto' | 'arp' | 'dhcp',
+        arp_mode: arpMode as 'reactive' | 'active',
+        enable_wifi_ap: enableWifiAp,
       })
       await fetchStatus()
     } catch (e: any) {
@@ -201,7 +218,7 @@ export function MitmPage() {
     setError(null)
     try {
       const res = await setTlsMitm(active)
-      setStatus((s) => ({ ...(s as any), tls_mitm: res.tls_mitm }))
+      setStatus((s) => s ? { ...s, tls_mitm: res.tls_mitm } : null)
       await fetchStatus()
     } catch (e: any) {
       setError(
@@ -212,22 +229,49 @@ export function MitmPage() {
     }
   }
 
+  const handleRemoveCa = async () => {
+    setCaRemoving(true)
+    setCaRemoveMsg(null)
+    try {
+      const res = await removeCaFromHost()
+      setCaRemoveMsg(res.message)
+    } catch (e: any) {
+      setCaRemoveMsg(e.response?.data?.detail || e.message || 'Failed to remove the CA')
+    } finally {
+      setCaRemoving(false)
+    }
+  }
+
   const isActive = status?.active ?? false
   const transportReady = status?.transport_ready ?? status?.redirect_active ?? false
   const targetIps = status?.target_ips ?? []
-  const capturedFlows = (status as any)?.captured_flows ?? 0
+  const capturedFlows = status?.captured_flows ?? 0
   const tlsEnabled = status?.tls_mitm !== false
-  const lastTrafficSeen = (status as any)?.last_traffic_seen as string | null | undefined
+  const lastTrafficSeen = status?.last_traffic_seen
   const trafficLastTs = lastTrafficSeen ? new Date(lastTrafficSeen).getTime() : 0
   // "Idle" = redirect/transport is up but no flow has been captured in the
   // last 30s (or none ever). Used to distinguish "fine but quiet" from
   // "something is wrong" without claiming ACTIVE proves traffic works.
   const idleMs = trafficLastTs ? Math.max(0, timeNow - trafficLastTs) : (isActive ? Number.MAX_SAFE_INTEGER : 0)
   const trafficIdle = isActive && (capturedFlows === 0 || idleMs > 30000)
+  // Packets from the target ARE reaching Nyx (WinDivert counter), but no flow
+  // has been decrypted: interception works, the TLS handshake is being
+  // rejected (CA not installed on the target / QUIC / pinning). The UI must
+  // say so instead of the generic "no traffic seen".
+  const packetsForwarded = status?.forwarded_packets ?? 0
+  const forwardedLastSeen = status?.forwarded_last_seen
+  const forwardedLastTs = forwardedLastSeen ? new Date(forwardedLastSeen).getTime() : 0
+  const interceptingButNoFlows = isActive && packetsForwarded > 0 && capturedFlows === 0
+  const tlsFailures = status?.tls_handshake_failures ?? 0
+  const tlsFailedHosts = status?.tls_failed_hosts ?? []
+  const trafficFlowing =
+    isActive &&
+    (capturedFlows > 0 ||
+      (packetsForwarded > 0 && forwardedLastTs > 0 && timeNow - forwardedLastTs < 30000))
   // Transport degraded = interception "on" but traffic can't reach the
   // proxy automatically (WinDivert/pf failed) — the target phone would be
   // blackholed, so the UI must say so instead of showing ACTIVE.
-  const transportDegraded = (status?.arp_spoofing || status?.dns_spoofing) && !transportReady
+  const transportDegraded = (status?.arp_spoofing || status?.dns_spoofing || status?.dhcp_spoofing) && !transportReady
 
   return (
     <div className="p-6 h-full overflow-y-auto">
@@ -262,29 +306,17 @@ export function MitmPage() {
           </div>
         )}
 
-        {/* ── HTTPS decryption info banner ─────────────────────────────────── */}
+        {/* ── HTTPS decryption disabled banner ─────────────────────────────── */}
         {status?.tls_mitm === false && (
           <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm flex items-start gap-2">
             <AlertTriangle size={16} className="shrink-0 mt-0.5" />
             <div>
               <strong>HTTPS decryption is OFF.</strong> HTTPS traffic is
-              tunnelled untouched (plain HTTP proxy). Enable the{' '}
-              <em>Decrypt HTTPS</em> toggle below to intercept HTTPS — the
-              target device will need the Nyx CA installed on it (Deploy
-              Command) to browse without certificate warnings.
-            </div>
-          </div>
-        )}
-
-        {/* ── TLS MITM disabled alert ──────────────────────────────────────── */}
-        {status?.tls_mitm === false && (
-          <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-sm flex items-start gap-2">
-            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-            <div>
-              <strong>TLS MITM disabled.</strong> The Nyx CA is not in the OS
-              trust store, so HTTPS traffic is tunnelled untouched (plain
-              HTTP proxy). Install the CA on this machine (Download CA →
-              import in system store) and restart the proxy to decrypt HTTPS.
+              tunnelled untouched (plain HTTP proxy). To decrypt it: enable
+              the <em>Decrypt HTTPS</em> toggle below and make sure the Nyx CA
+              is trusted — install it on this machine (Download CA → import in
+              the system store, then restart the proxy) and on the target
+              device (Deploy Command) to browse without certificate warnings.
             </div>
           </div>
         )}
@@ -318,6 +350,30 @@ export function MitmPage() {
                 </span>
               </div>
               <div className="flex justify-between">
+                <span className="text-gray-400">DHCP Spoofing</span>
+                <span className={statusColor(status?.dhcp_spoofing ?? false)}>
+                  {status?.dhcp_spoofing ? 'ON' : 'OFF'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">DHCP offers sent</span>
+                <span className="text-gray-200 font-mono">
+                  {status?.dhcp_offers ?? 0}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Lease requests (accepted)</span>
+                <span className="text-gray-200 font-mono">
+                  {status?.dhcp_lease_requests ?? 0}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Target packets captured</span>
+                <span className="text-gray-200 font-mono">
+                  {status?.forwarded_packets ?? 0}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-gray-400">DNS Spoofing</span>
                 <span className={statusColor(status?.dns_spoofing ?? false)}>
                   {status?.dns_spoofing ? 'ON' : 'OFF'}
@@ -335,24 +391,26 @@ export function MitmPage() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-400">TLS MITM (HTTPS decryption)</span>
-                <span className={statusColor(status?.tls_mitm ?? true)}>
-                  {status?.tls_mitm === false ? 'OFF — passthrough' : 'ON'}
-                </span>
-              </div>
-              <div className="flex justify-between">
                 <span className="text-gray-400">Flows captured</span>
                 <span className={statusColor(capturedFlows > 0)}>
                   {capturedFlows > 0 ? capturedFlows : '0'}
                 </span>
               </div>
               <div className="flex justify-between">
+                <span className="text-gray-400">TLS rejected by target</span>
+                <span className={statusColor(tlsFailures === 0)}>
+                  {tlsFailures > 0 ? `${tlsFailures} handshake${tlsFailures === 1 ? '' : 's'}` : 'none'}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-gray-400">Last traffic seen</span>
-                <span className={statusColor(!trafficIdle)}>
+                <span className={statusColor(trafficFlowing)}>
                   {lastTrafficSeen
                     ? new Date(trafficLastTs).toLocaleTimeString()
                     : isActive
-                      ? 'never'
+                      ? forwardedLastSeen
+                        ? `${new Date(forwardedLastTs).toLocaleTimeString()} (packets only)`
+                        : 'never'
                       : '-'}
                 </span>
               </div>
@@ -409,7 +467,7 @@ export function MitmPage() {
               </h2>
             </div>
             <p className="text-xs text-gray-300 mb-2">
-              ARP/DNS spoofing is running but the transparent redirect
+              ARP/DHCP/DNS spoofing is running but the transparent redirect
               (WinDivert / pf) did not come up. Traffic from the target phone
               will NOT be seen by Nyx — the device may even lose internet
               access. Fix the transport (run Nyx as Administrator) or intercept
@@ -483,50 +541,19 @@ export function MitmPage() {
                   intercepted.
                 </p>
               )}
+              <DhcpStatusPanel status={status} />
               {trafficIdle && (
-                <div className="mt-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
-                  <p className="text-amber-300 font-medium mb-1">
-                    ⚠ Transport is up, but no traffic has been observed
-                    {lastTrafficSeen ? ' for a while' : ' yet'}.
-                  </p>
-                  <p className="text-amber-200/80 mb-1">
-                    "ACTIVE" means the redirect and spoofing tasks are running —
-                    it does not prove traffic is reaching the proxy. Check:
-                  </p>
-                  <ul className="text-amber-200/70 list-disc list-inside space-y-0.5">
-                    <li>
-                      <strong>Firewall:</strong> is the proxy port open for LAN
-                      devices? (Nyx tries to add a Windows Firewall rule, but it
-                      needs Administrator rights.)
-                    </li>
-                    <li>
-                      <strong>CA certificate:</strong> HTTPS traffic is only
-                      decryptable after installing the Nyx CA on the target.
-                    </li>
-                    <li>
-                      <strong>QUIC/HTTP3:</strong> browsers increasingly use
-                      QUIC (UDP) which bypasses the proxy — disable QUIC on the
-                      target (e.g. Chrome flags → quic).
-                    </li>
-                    <li>
-                      <strong>Private DNS / DoH / DoT:</strong> targets using a
-                      private DNS provider won't send plain DNS to the router,
-                      so DNS spoofing misses them.
-                    </li>
-                    <li>
-                      <strong>Certificate pinning:</strong> apps that pin
-                      certificates will reject Nyx's CA and stall the connection.
-                    </li>
-                    <li>
-                      <strong>Target activity:</strong> the device must actually
-                      generate HTTP/HTTPS traffic — open a site on the target.
-                    </li>
-                  </ul>
-                </div>
+                <TrafficDiagnosticsPanel
+                  interceptingButNoFlows={interceptingButNoFlows}
+                  packetsForwarded={packetsForwarded}
+                  tlsFailures={tlsFailures}
+                  tlsFailedHosts={tlsFailedHosts}
+                  lastTrafficSeen={lastTrafficSeen}
+                />
               )}
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <button
                 onClick={handleStop}
                 disabled={loading}
@@ -543,7 +570,27 @@ export function MitmPage() {
                 <Download size={16} />
                 Download CA
               </a>
+              <a
+                href="/api/requests/export/har"
+                download
+                className="flex items-center gap-2 px-5 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm font-medium rounded-lg transition-colors border border-gray-700"
+                title="Export the captured session as HAR (opens in DevTools/Charles)"
+              >
+                <Download size={16} />
+                Export HAR
+              </a>
+              <button
+                onClick={handleRemoveCa}
+                disabled={caRemoving}
+                className="flex items-center gap-2 px-5 py-2.5 bg-gray-800 hover:bg-red-900/50 disabled:bg-gray-700 text-gray-200 text-sm font-medium rounded-lg transition-colors border border-gray-700"
+                title="Remove the Nyx CA from THIS PC's trust store (post-test cleanup)"
+              >
+                {caRemoving ? 'Removing...' : 'Remove CA (this PC)'}
+              </button>
             </div>
+
+            {/* Live per-target activity (SNI + HTTP, works without the CA) */}
+            <ActivityMonitor activity={status?.activity ?? []} />
           </div>
         )}
 
@@ -580,80 +627,187 @@ export function MitmPage() {
                   </div>
                 </div>
 
-                <div className="flex items-end gap-3">
-                  {/* Gateway IP */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1.5">
-                      Gateway IP
-                    </label>
-                    <input
-                      type="text"
-                      value={gatewayIp}
-                      onChange={(e) => setGatewayIp(e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-purple-500"
-                      placeholder="192.168.1.1"
-                    />
-                  </div>
+                {/* Gateway IP — same size as Manual Target IP */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    Gateway IP
+                  </label>
+                  <input
+                    type="text"
+                    value={gatewayIp}
+                    onChange={(e) => setGatewayIp(e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    placeholder="192.168.1.1"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Your router IP — auto-detected from the network scan, edit
+                    if needed
+                  </p>
+                </div>
+              </div>
 
-                  {/* DNS Spoof toggle */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1.5">
-                      DNS Spoof
-                    </label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setEnableDns(true)}
-                        className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
-                          enableDns
-                            ? 'bg-purple-600 text-white'
-                            : 'bg-gray-800 text-gray-400'
-                        }`}
-                      >
-                        ON
-                      </button>
-                      <button
-                        onClick={() => setEnableDns(false)}
-                        className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
-                          !enableDns
-                            ? 'bg-purple-600 text-white'
-                            : 'bg-gray-800 text-gray-400'
-                        }`}
-                      >
-                        OFF
-                      </button>
-                    </div>
+              {/* Options: DNS spoof / spoofing method / HTTPS decryption */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                {/* DNS Spoof toggle */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    DNS Spoof
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setEnableDns(true)}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        enableDns
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      ON
+                    </button>
+                    <button
+                      onClick={() => setEnableDns(false)}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        !enableDns
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      OFF
+                    </button>
                   </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Off by default — transparent mode already captures traffic
+                  </p>
+                </div>
 
-                  {/* Decrypt HTTPS (TLS MITM) toggle — live, no proxy restart */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1.5">
-                      Decrypt HTTPS
-                    </label>
-                    <div className="flex gap-2">
+                {/* Spoofing method selector */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    Spoofing
+                  </label>
+                  <div className="flex gap-1.5">
+                    {(['auto', 'arp', 'dhcp'] as const).map((m) => (
                       <button
-                        onClick={() => handleSetTls(true)}
-                        disabled={tlsSaving}
-                        className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
-                          tlsEnabled
+                        key={m}
+                        onClick={() => setSpoofMethod(m)}
+                        className={`flex-1 px-2.5 py-2 text-xs rounded font-medium transition-colors ${
+                          spoofMethod === m
                             ? 'bg-purple-600 text-white'
                             : 'bg-gray-800 text-gray-400'
                         }`}
+                        title={
+                          m === 'auto'
+                            ? 'DHCP first (stealth, no alert) — automatic ARP fallback if DHCP does not convert within ~20s'
+                            : m === 'arp'
+                              ? 'ARP spoofing — immediate, may trigger a "suspicious network" alert on the target'
+                              : 'DHCP spoofing only — stealthy (no alert), target must reconnect Wi-Fi once'
+                        }
                       >
-                        ON
+                        {m === 'auto' ? 'Auto' : m.toUpperCase()}
                       </button>
-                      <button
-                        onClick={() => handleSetTls(false)}
-                        disabled={tlsSaving}
-                        className={`px-3 py-2 text-xs rounded font-medium transition-colors ${
-                          !tlsEnabled
-                            ? 'bg-purple-600 text-white'
-                            : 'bg-gray-800 text-gray-400'
-                        }`}
-                      >
-                        OFF
-                      </button>
-                    </div>
+                    ))}
                   </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Auto = DHCP first (no alert) → automatic ARP fallback
+                  </p>
+                </div>
+
+                {/* ARP poisoning mode — stealth selector */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    ARP Mode
+                  </label>
+                  <div className="flex gap-1.5">
+                    {(['reactive', 'active'] as const).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setArpMode(m)}
+                        className={`flex-1 px-2.5 py-2 text-xs rounded font-medium transition-colors ${
+                          arpMode === m
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-800 text-gray-400'
+                        }`}
+                        title={
+                          m === 'reactive'
+                            ? 'Stealth: answer only when the target asks who the gateway is. Looks like normal ARP — much harder for Samsung/Android to detect.'
+                            : 'Active: flood the target with spoofed replies every ~3s. Reliable but Samsung/Android flag this as suspicious activity.'
+                        }
+                      >
+                        {m === 'reactive' ? 'Stealth (react)' : 'Active (flood)'}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Stealth = answer only when asked — best against modern phones
+                  </p>
+                </div>
+
+                {/* WiFi AP mode — the ultimate bypass */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    WiFi AP Mode (zero detection)
+                  </label>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => setEnableWifiAp(true)}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        enableWifiAp
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      ON
+                    </button>
+                    <button
+                      onClick={() => setEnableWifiAp(false)}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        !enableWifiAp
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      OFF
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Turns Nyx into a rogue AP — the target connects to you, you
+                    ARE the gateway. Zero spoofing, zero detection. Requires
+                    driver support.
+                  </p>
+                </div>
+
+                {/* Decrypt HTTPS (TLS MITM) toggle — live, no proxy restart */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    Decrypt HTTPS
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleSetTls(true)}
+                      disabled={tlsSaving}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        tlsEnabled
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      ON
+                    </button>
+                    <button
+                      onClick={() => handleSetTls(false)}
+                      disabled={tlsSaving}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        !tlsEnabled
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      OFF
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Requires the Nyx CA on the target
+                  </p>
                 </div>
               </div>
 
@@ -911,6 +1065,47 @@ export function MitmPage() {
           </a>
         </div>
 
+        {/* ── CA uninstall (target + this PC) ───────────────────────────── */}
+        <div className="p-4 rounded-lg border border-gray-800 bg-gray-900/50 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={14} className="text-amber-400" />
+            <h3 className="text-sm font-semibold text-gray-200">
+              Remove the CA when done
+            </h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-3 leading-relaxed">
+            Trusting the Nyx CA disables TLS integrity checks for it. Remove it
+            from every device that installed it as soon as testing is over.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div className="text-xs text-gray-400 space-y-1.5">
+              <p className="text-gray-300 font-medium">Android</p>
+              <p>Settings → Lock screen &amp; security → Certificate management → Remove → select the Nyx/mitmproxy entry</p>
+            </div>
+            <div className="text-xs text-gray-400 space-y-1.5">
+              <p className="text-gray-300 font-medium">iOS / iPadOS</p>
+              <p>Settings → General → VPN &amp; Device Management → delete the Nyx profile; then Settings → General → About → Certificate Trust Settings → disable Nyx CA</p>
+            </div>
+            <div className="text-xs text-gray-400 space-y-1.5">
+              <p className="text-gray-300 font-medium">Windows / macOS</p>
+              <p>Windows: certmgr.msc → Trusted Root → remove the mitmproxy/Nyx entry. macOS: Keychain Access → System → delete the Nyx entry.</p>
+            </div>
+            <div className="text-xs text-gray-400 space-y-1.5">
+              <p className="text-gray-300 font-medium">This PC</p>
+              <button
+                onClick={handleRemoveCa}
+                disabled={caRemoving}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-red-900/50 disabled:bg-gray-700 text-gray-200 text-xs font-medium rounded-lg transition-colors border border-gray-700"
+              >
+                {caRemoving ? 'Removing...' : 'Remove CA from this PC'}
+              </button>
+              {caRemoveMsg && (
+                <p className="text-[11px] text-gray-400 mt-1.5">{caRemoveMsg}</p>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* ── Deploy: remote system command generator ───────────────────── */}
         <div className="mb-6">
           <DeployBox
@@ -942,18 +1137,20 @@ export function MitmPage() {
               other IoT devices can be skipped.
             </p>
             <p>
-              <strong className="text-gray-300">3. ARP Spoofing</strong> — Nyx
-              sends fake ARP packets to each selected target, impersonating the
-              gateway. Each target sends all its traffic through Nyx. Intervals
-              are randomised to reduce IDS detection.
+              <strong className="text-gray-300">3. Spoofing (Auto)</strong> —
+              By default Nyx uses{' '}
+              <strong className="text-gray-300">DHCP spoofing</strong>: the
+              target is assigned Nyx as its gateway legitimately, so phones do
+              NOT show the "suspicious network activity" alert (no forged ARP,
+              gateway MAC never conflicts). The target must reconnect to Wi-Fi
+              once to receive the lease. If DHCP can't start, Nyx falls back to
+              classic ARP spoofing (immediate, but phones may flag it).
             </p>
             <p>
-              <strong className="text-gray-300">
-                4. Transparent Proxy + DNS Spoofing
-              </strong>{' '}
+              <strong className="text-gray-300">4. Transparent Proxy</strong>{' '}
               — Traffic is forwarded to the real destination while being logged.
-              Optional DNS spoofing intercepts all DNS queries (resolves to Nyx
-              IP).
+              DNS spoofing is OFF by default: with transparent interception it
+              is unnecessary and can break the target's connectivity.
             </p>
             <p>
               <strong className="text-gray-300">5. Restoration</strong> — When

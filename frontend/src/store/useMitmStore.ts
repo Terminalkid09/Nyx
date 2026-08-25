@@ -22,6 +22,12 @@ interface MitmState {
   gatewayIp: string
   /** Whether DNS spoofing is enabled */
   enableDns: boolean
+  /** Spoofing method: 'auto' (DHCP preferred) | 'arp' | 'dhcp' */
+  spoofMethod: string
+  /** ARP poisoning mode: 'reactive' (stealth, answer-only) | 'active' (flood) */
+  arpMode: string
+  /** Enable rogue WiFi Access Point mode (target connects to us) */
+  enableWifiAp: boolean
   /** Whether a scan has been attempted at least once */
   scanAttempted: boolean
 
@@ -45,6 +51,9 @@ interface MitmState {
   removeIp: (ip: string) => void
   setGatewayIp: (ip: string) => void
   setEnableDns: (v: boolean) => void
+  setSpoofMethod: (v: string) => void
+  setArpMode: (v: string) => void
+  setEnableWifiAp: (v: boolean) => void
   setScanning: (v: boolean) => void
   setScanAttempted: (v: boolean) => void
   setLoading: (v: boolean) => void
@@ -59,7 +68,17 @@ export const useMitmStore = create<MitmState>()(
       devices: [],
       selectedIps: new Set<string>(),
       gatewayIp: '192.168.1.1',
-      enableDns: true,
+      // DNS spoofing is OFF by default: with ARP/DHCP transparent interception
+      // the target's traffic already flows through the proxy, and resolving
+      // domains to Nyx's own IP can blackhole the target.
+      enableDns: false,
+      // 'auto' prefers DHCP (no "suspicious network" alert) and falls back to ARP.
+      spoofMethod: 'auto',
+      // Reactive (answer-only) ARP by default: modern Samsung/Android flag the
+      // periodic unsolicited flood, so we only answer when the target asks.
+      arpMode: 'reactive',
+      // WiFi AP mode off by default (needs driver support)
+      enableWifiAp: false,
       scanAttempted: false,
 
       // Transient defaults
@@ -110,6 +129,9 @@ export const useMitmStore = create<MitmState>()(
 
       setGatewayIp: (ip) => set({ gatewayIp: ip }),
       setEnableDns: (v) => set({ enableDns: v }),
+      setSpoofMethod: (v) => set({ spoofMethod: v }),
+      setArpMode: (v) => set({ arpMode: v }),
+      setEnableWifiAp: (v) => set({ enableWifiAp: v }),
       setScanning: (v) => set({ scanning: v }),
       setScanAttempted: (v) => set({ scanAttempted: v }),
       setLoading: (v) => set({ loading: v }),
@@ -117,7 +139,9 @@ export const useMitmStore = create<MitmState>()(
       setManualIp: (v) => set({ manualIp: v }),
     }),
     {
-      name: 'nyx-mitm-store',
+      // v2: DNS spoofing now defaults OFF and spoof_method was added — bumping
+      // the key resets stale persisted state so the safe defaults take effect.
+      name: 'nyx-mitm-store-v2',
       // Persist only the values that are expensive to re-obtain.
       // Sets are not JSON-serialisable natively, so we serialise selectedIps
       // as an array and restore it.
@@ -126,6 +150,9 @@ export const useMitmStore = create<MitmState>()(
         selectedIps: Array.from(s.selectedIps),
         gatewayIp: s.gatewayIp,
         enableDns: s.enableDns,
+        spoofMethod: s.spoofMethod,
+        arpMode: s.arpMode,
+        enableWifiAp: s.enableWifiAp,
         scanAttempted: s.scanAttempted,
       }),
       // Re-hydrate Set from stored array

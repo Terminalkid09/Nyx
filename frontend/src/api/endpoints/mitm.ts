@@ -4,6 +4,18 @@ export interface MitmStatus {
   active: boolean
   transport_ready?: boolean
   arp_spoofing: boolean
+  ndp_spoofing?: boolean
+  dhcp_spoofing?: boolean
+  dhcp_offers?: number
+  dhcp_lease_requests?: number
+  dhcp_naks?: number
+  dhcp_granted_ips?: string[]
+  dhcp_fallback_in?: number | null
+  last_arp_sent?: string | null
+  forwarded_packets?: number
+  forwarded_last_seen?: string | null
+  tls_handshake_failures?: number
+  tls_failed_hosts?: Array<{ host: string; error: string; ts: number }>
   dns_spoofing: boolean
   dns_spoof_error?: string | null
   target_ips: string[]
@@ -17,6 +29,8 @@ export interface MitmStatus {
   proxy_host?: string | null
   proxy_port?: number | null
   tls_mitm?: boolean
+  quic_blocked_packets?: number
+  activity?: Array<{ ip: string; host: string; count: number; last_seen: string }>
 }
 
 export interface NetworkDevice {
@@ -31,6 +45,9 @@ export interface MitmStartRequest {
   target_ips: string[]
   gateway_ip: string
   enable_dns_spoof: boolean
+  spoof_method?: 'auto' | 'arp' | 'dhcp'
+  arp_mode?: 'reactive' | 'active'
+  enable_wifi_ap?: boolean
 }
 
 export async function getMitmStatus(): Promise<MitmStatus> {
@@ -59,4 +76,9 @@ export async function scanNetwork(): Promise<NetworkDevice[]> {
 
 export async function getCaCertUrl(): Promise<string> {
   return '/api/ca-certificate'
+}
+
+export async function removeCaFromHost(): Promise<{ status: string; message: string }> {
+  const { data } = await apiClient.post('/api/ca/remove')
+  return data
 }
