@@ -62,6 +62,11 @@ _DHCP_FALLBACK_GRACE_NO_DISCOVER: float = 20.0
 _DHCP_FALLBACK_GRACE_RACE_LOST: float = 10.0
 _dhcp_fallback_task: asyncio.Task | None = None
 _dhcp_started_ts: float | None = None
+# Naive-UTC timestamp of the current MITM session start. Used to count only
+# the requests captured since THIS session began (the dedicated MITM session
+# accumulates across runs, so counting its whole history would show old data
+# as "flows captured" right after a fresh start).
+_mitm_session_started_ts: datetime | None = None
 # Background tasks (e.g. async target-MAC resolution) kept alive by reference.
 _bg_tasks: set[asyncio.Task] = set()
 
@@ -512,7 +517,7 @@ async def mitm_start(req: MITMStartRequest):
 
 async def _mitm_start_locked(req: MITMStartRequest):
     global _spoofer, _dns_spoofer, _redirect_active, _dns_spoof_error, _ndp_spoofer, _dhcp_spoofer, _wifi_ap_manager
-    global _dhcp_started_ts
+    global _dhcp_started_ts, _mitm_session_started_ts
 
     if _engine is None:
         raise HTTPException(status_code=500, detail="Proxy engine not initialized")
@@ -848,6 +853,9 @@ async def _mitm_start_locked(req: MITMStartRequest):
     # was persisted in the UI before (the cause of "MITM traffic never
     # appears": UI on Test_session, proxy stamping Default Session).
     _engine.current_session_id = MITM_SESSION_ID
+    # Remember when this session started so captured_flows only counts what
+    # was intercepted since the start (the MITM session accumulates forever).
+    _mitm_session_started_ts = datetime.now(timezone.utc).replace(tzinfo=None)
 
     return MITMStartResponse(
         status="ok",
@@ -972,10 +980,10 @@ async def mitm_status():
     ndp_running = _ndp_spoofer is not None and getattr(_ndp_spoofer, '_running', False)
     dhcp_running = _dhcp_spoofer is not None
     dns_running = _dns_spoofer is not None and getattr(_dns_spoofer, '_running', False)
-    # How many requests the proxy has actually logged for the MITM session.
-    # (The mitmproxy in-memory flow list is NOT a reliable proxy for this —
-    # it can be empty while requests were captured and persisted, which is
-    # why the UI showed "Flows captured: 0" despite a full Proxy tab.)
+    # How many requests the proxy has captured during the CURRENT MITM
+    # session (since the last start). The dedicated MITM session accumulates
+    # across runs, so counting its whole history would show old data as
+    # "flows captured" right after a fresh start.
     proxy_count = 0
     last_traffic_seen: str | None = None
     if _engine:
@@ -986,11 +994,12 @@ async def mitm_status():
             from core.storage.traffic import MITM_SESSION_ID
 
             async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(func.count(), func.max(Request.timestamp)).where(
-                        Request.session_id == MITM_SESSION_ID
-                    )
+                query = select(func.count(), func.max(Request.timestamp)).where(
+                    Request.session_id == MITM_SESSION_ID
                 )
+                if _mitm_session_started_ts is not None:
+                    query = query.where(Request.timestamp >= _mitm_session_started_ts)
+                result = await db.execute(query)
                 proxy_count, latest = result.one()
                 if latest is not None:
                     # SQLite returns naive UTC datetimes — tag them so the

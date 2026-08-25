@@ -40,10 +40,11 @@ export function useWebSocket() {
       })
       .catch(() => {})
 
-    // Load persisted proxy history for the active session so every module
-    // (ProxyLog, Repeater, Fuzzer, Comparer, ...) sees old requests right
-    // after startup, not just live traffic captured since Nyx was opened.
     let mounted = true
+    // The packaged backend exe takes a few seconds to boot, so the initial
+    // history fetch can race it and fail — leaving the Proxy tab empty at
+    // startup. Retry once the WebSocket connects (i.e. the backend is up).
+    let historyLoaded = false
     const loadHistory = async () => {
       try {
         const { data } = await apiClient.get('/api/requests', {
@@ -53,11 +54,15 @@ export function useWebSocket() {
           clearRequests()
           // Reverse them since addRequest prepends
           data.items.slice().reverse().forEach((req: any) => addRequest(req))
+          historyLoaded = true
         }
       } catch (err) {
         console.error('Failed to load proxy history', err)
       }
     }
+    // Load persisted proxy history for the active session so every module
+    // (ProxyLog, Repeater, Fuzzer, Comparer, ...) sees old requests right
+    // after startup, not just live traffic captured since Nyx was opened.
     if (activeSessionId) loadHistory()
 
     // Connect once �?" the singleton guards against double-connects
@@ -102,7 +107,12 @@ export function useWebSocket() {
         if (e.session_id && e.session_id !== activeSessionId) return
         addFinding(e)
       }),
-      nyxWs.on('ws.connected', () => setWsState('connected')),
+      nyxWs.on('ws.connected', () => {
+        setWsState('connected')
+        // The backend is now up — retry the history fetch if the initial
+        // attempt failed (backend boot race).
+        if (!historyLoaded && mounted && activeSessionId) loadHistory()
+      }),
       nyxWs.on('ws.disconnected', () => setWsState('disconnected')),
       nyxWs.on('ws.error', () => setWsState('error')),
     ]
