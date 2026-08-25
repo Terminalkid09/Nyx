@@ -23,6 +23,23 @@ export function useWebSocket() {
   )
 
   useEffect(() => {
+    // The active session is persisted in localStorage, but the backend's
+    // proxy session stamp only changes when the user clicks a session
+    // (activateSession). After an app restart the UI can therefore sit on
+    // "Test_session" while the proxy still stamps "Default Session" — new
+    // MITM captures are then filtered out and never appear in the Proxy tab.
+    // Sync the proxy to the persisted active session on startup.
+    apiClient
+      .get('/api/proxy/session')
+      .then(({ data }) => {
+        if (activeSessionId && data.session_id !== activeSessionId) {
+          apiClient
+            .patch('/api/proxy/session', { session_id: activeSessionId })
+            .catch(() => {})
+        }
+      })
+      .catch(() => {})
+
     // Load persisted proxy history for the active session so every module
     // (ProxyLog, Repeater, Fuzzer, Comparer, ...) sees old requests right
     // after startup, not just live traffic captured since Nyx was opened.
