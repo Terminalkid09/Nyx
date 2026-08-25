@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { GitCompare, Plus, Trash2 } from 'lucide-react'
+import { GitCompare, Trash2 } from 'lucide-react'
 import {
   fetchComparerItems,
   createComparerItem,

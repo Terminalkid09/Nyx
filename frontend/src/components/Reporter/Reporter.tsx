@@ -14,7 +14,7 @@ export function Reporter() {
     setLoading(true)
     setError('')
     try {
-      const { data, headers } = await apiClient.post('/api/reports/generate', null, {
+      const { data } = await apiClient.post('/api/reports/generate', null, {
         params: { session_id: selectedSession, format },
         responseType: format === 'pdf' ? 'blob' : 'text',
       })

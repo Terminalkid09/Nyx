@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Trash2, Save, X, TestTube, GripVertical, ArrowUp, ArrowDown } from 'lucide-react'
+import { Plus, Trash2, Save, X, TestTube, ArrowUp, ArrowDown } from 'lucide-react'
 import { apiClient } from '../../api/client'
 
 interface Rule {

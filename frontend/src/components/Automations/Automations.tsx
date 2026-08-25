@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Activity, Webhook as WebhookIcon, Clock, FileText, Plus, Trash2, ToggleLeft, ToggleRight, Play, Copy, Check } from 'lucide-react'
-import { listWebhooks, createWebhook, deleteWebhook, testWebhook, listSchedules, createSchedule, deleteSchedule, toggleSchedule, listTemplates, deleteTemplate, listReports, generateCSRF, Webhook, Schedule, Template, Report } from '../../api/endpoints/automations'
+import { listWebhooks, createWebhook, deleteWebhook, testWebhook, listSchedules, createSchedule, toggleSchedule, listTemplates, deleteTemplate, listReports, generateCSRF, Webhook, Schedule, Template, Report } from '../../api/endpoints/automations'
 
 type Tab = 'webhooks' | 'schedules' | 'templates' | 'csrf'
 
@@ -9,7 +9,7 @@ export function Automations() {
   const [webhooks, setWebhooks] = useState<Webhook[]>([])
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
-  const [reports, setReports] = useState<Report[]>([])
+  const [, setReports] = useState<Report[]>([])
   const [showWHForm, setShowWHForm] = useState(false)
   const [showSchedForm, setShowSchedForm] = useState(false)
   const [whName, setWHName] = useState('')

@@ -227,7 +227,7 @@ export function Decoder() {
     try {
       const { data } = await apiClient.post('/api/decoder/hash-identify', { hash: hashInput })
       setHashResults(data.results)
-    } catch (err: any) {} finally { setHashLoading(false) }
+    } catch {} finally { setHashLoading(false) }
   }
 
   const handleCharsetDetect = async () => {
@@ -236,7 +236,7 @@ export function Decoder() {
     try {
       const { data } = await apiClient.post('/api/decoder/charset-detect', { data: charsetInput })
       setCharsetResult(data)
-    } catch (err: any) {} finally { setCharsetLoading(false) }
+    } catch {} finally { setCharsetLoading(false) }
   }
 
   const copyOutput = async () => {

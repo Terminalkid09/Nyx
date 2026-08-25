@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Filter, BarChart3, RefreshCw, ChevronRight, Zap, Bug, Repeat, Send } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Zap, Bug, Repeat, Send } from 'lucide-react'
 import { getGroupedFindings, getTriageStats, getRecentFindings, TriageGroup, TriageStats, RecentFinding } from '../../api/endpoints/triage'
 import { useSessionStore } from '../../store/useSessionStore'
 
