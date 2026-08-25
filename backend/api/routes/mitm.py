@@ -31,6 +31,7 @@ from modules.dhcp_spoof import DHCPSpoofer, detect_subnet_mask
 from modules.ndp_spoof import NDPSpoofer, is_ipv6
 from modules.vendor_lookup import lookup_vendor_async
 from modules.ca_portal import DEFAULT_PORT as CA_PORTAL_PORT
+from core.storage.traffic import MITM_SESSION_ID
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +294,7 @@ class MITMStartResponse(BaseModel):
     status: str
     message: str
     admin_mode: bool
+    session_id: str
 
 
 class MITMStopResponse(BaseModel):
@@ -840,6 +842,13 @@ async def _mitm_start_locked(req: MITMStartRequest):
     if _ndp_spoofer is not None:
         _metrics.inc("mitm_ndp_spoofs_total")
 
+    # Route all captured traffic into the dedicated MITM session. The
+    # frontend switches the active session to this ID when start returns, so
+    # the Proxy tab always shows intercepted traffic — no matter what session
+    # was persisted in the UI before (the cause of "MITM traffic never
+    # appears": UI on Test_session, proxy stamping Default Session).
+    _engine.current_session_id = MITM_SESSION_ID
+
     return MITMStartResponse(
         status="ok",
         message=(
@@ -849,6 +858,7 @@ async def _mitm_start_locked(req: MITMStartRequest):
             f"{'Warnings: ' + '; '.join(warnings) if warnings else ''}"
         ),
         admin_mode=admin,
+        session_id=str(MITM_SESSION_ID),
     )
 
 

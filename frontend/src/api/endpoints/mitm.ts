@@ -62,8 +62,9 @@ export async function getMitmStatus(): Promise<MitmStatus> {
 // button flipping back to clickable while the backend was still tearing down).
 const MITM_HEAVY_TIMEOUT = 120000
 
-export async function startMitm(req: MitmStartRequest): Promise<void> {
-  await apiClient.post('/api/mitm/start', req, { timeout: MITM_HEAVY_TIMEOUT })
+export async function startMitm(req: MitmStartRequest): Promise<{ session_id?: string }> {
+  const { data } = await apiClient.post('/api/mitm/start', req, { timeout: MITM_HEAVY_TIMEOUT })
+  return data
 }
 
 export async function stopMitm(): Promise<{ status: string }> {

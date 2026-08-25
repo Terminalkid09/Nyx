@@ -11,6 +11,7 @@ import {
   NetworkDevice,
 } from '../../api/endpoints/mitm'
 import { useMitmStore } from '../../store/useMitmStore'
+import { useSessionStore } from '../../store/useSessionStore'
 import { DeployBox } from './DeployBox'
 import { DhcpStatusPanel } from './DhcpStatusPanel'
 import { ActivityMonitor } from './ActivityMonitor'
@@ -181,7 +182,7 @@ export function MitmPage() {
     setLoading(true)
     setError(null)
     try {
-      await startMitm({
+      const res = await startMitm({
         target_ips: Array.from(selectedIps),
         gateway_ip: gatewayIp,
         enable_dns_spoof: enableDns,
@@ -189,6 +190,14 @@ export function MitmPage() {
         arp_mode: arpMode as 'reactive' | 'active',
         enable_wifi_ap: enableWifiAp,
       })
+      // MITM traffic is stamped with a dedicated MITM Session (backend).
+      // Switch the active session to it so the Proxy tab shows the captured
+      // traffic (and the WebSocket filter matches) — regardless of which
+      // session the UI had persisted before.
+      if (res?.session_id) {
+        useSessionStore.getState().activateSession(res.session_id).catch(() => {})
+        useSessionStore.getState().fetchSessions().catch(() => {})
+      }
       await fetchStatus()
     } catch (e: any) {
       setError(errText(e, 'Failed to start MITM'))
