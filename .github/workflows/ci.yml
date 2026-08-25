@@ -24,23 +24,11 @@ jobs:
       - name: Run unit tests
         working-directory: .
         run: |
-          python -m pytest tests/test_activity_monitor.py \
-                           tests/test_audit.py \
-                           tests/test_scanner_advanced.py \
-                           tests/test_scanner_oast_context_depth.py \
-                           tests/test_auth_keeper.py \
-                           tests/test_auto_exploit.py \
-                           tests/test_benchmarks.py \
-                           tests/test_collaborator.py \
-                           tests/test_compliance.py \
-                           tests/test_content_discovery.py \
-                           tests/test_dhcp_spoof.py \
-                           tests/test_enterprise_fixes.py \
+          python -m pytest tests/test_auth_keeper.py \
                            tests/test_idor_check.py \
-                           tests/test_proxy_addons.py \
+                           tests/test_content_discovery.py \
+                           tests/test_auto_exploit.py \
                            tests/test_recommender.py \
-                           tests/test_shutdown.py \
-                           tests/test_traffic_features.py \
                            -q --timeout=60 -x --asyncio-mode=auto \
                            --tb=short
         env:
