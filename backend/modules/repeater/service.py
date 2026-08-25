@@ -8,6 +8,7 @@ from typing import Optional
 
 import logging
 
+from core.utils.text import safe_decode
 from core.storage.database import AsyncSessionLocal
 from core.storage.models import RepeaterTab as RepeaterTabModel, RepeaterHistory as RepeaterHistoryModel
 from sqlalchemy import select
@@ -165,7 +166,12 @@ class RepeaterService:
                 resp = await client.request(method=method, url=url, headers=headers, content=body)
                 entry.response_status = resp.status_code
                 entry.response_headers = dict(resp.headers)
-                entry.response_body = resp.text
+                # Decode with safe_decode: text bodies stay readable, binary
+                # bodies (video/images/files) become hex instead of garbage —
+                # resp.text rendered binary payloads as UTF-8 replacement
+                # chars ("caratteri stranissimi" in the Repeater UI).
+                ct = resp.headers.get("content-type", "")
+                entry.response_body = safe_decode(resp.content, ct)
                 entry.time_ms = int(resp.elapsed.total_seconds() * 1000)
             except httpx.TimeoutException:
                 entry.response_status = 504

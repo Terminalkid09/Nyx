@@ -972,18 +972,32 @@ async def mitm_status():
     ndp_running = _ndp_spoofer is not None and getattr(_ndp_spoofer, '_running', False)
     dhcp_running = _dhcp_spoofer is not None
     dns_running = _dns_spoofer is not None and getattr(_dns_spoofer, '_running', False)
-    # Expose how many requests the proxy has logged so the UI can show
-    # whether traffic is actually being intercepted (useful for diagnosis).
+    # How many requests the proxy has actually logged for the MITM session.
+    # (The mitmproxy in-memory flow list is NOT a reliable proxy for this —
+    # it can be empty while requests were captured and persisted, which is
+    # why the UI showed "Flows captured: 0" despite a full Proxy tab.)
     proxy_count = 0
     last_traffic_seen: str | None = None
-    if _engine and hasattr(_engine, '_master') and _engine._master:
+    if _engine:
         try:
-            flows = _engine._master.state.flows
-            proxy_count = len(flows)
-            if flows:
-                ts = getattr(flows[-1], 'last_network_timestamp', None) or getattr(flows[-1], 'timestamp_end', None)
-                if ts:
-                    last_traffic_seen = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            from sqlalchemy import func, select
+            from core.storage.database import AsyncSessionLocal
+            from core.storage.models import Request
+            from core.storage.traffic import MITM_SESSION_ID
+
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(func.count(), func.max(Request.timestamp)).where(
+                        Request.session_id == MITM_SESSION_ID
+                    )
+                )
+                proxy_count, latest = result.one()
+                if latest is not None:
+                    # SQLite returns naive UTC datetimes — tag them so the
+                    # frontend parses the timestamp correctly.
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=timezone.utc)
+                    last_traffic_seen = latest.astimezone(timezone.utc).isoformat()
         except Exception:
             proxy_count = 0
     local_ip = _get_local_ip()
