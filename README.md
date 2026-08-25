@@ -48,7 +48,7 @@
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
 | **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
 | **Security Hardening** | SQLCipher AES-256 encryption at-rest, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail |
-| **Enterprise Features** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 620+ tests, CI/CD pipeline, Electron code signing |
+| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 620+ tests, CI/CD pipeline, Electron code signing |
 
 Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
 
@@ -732,7 +732,7 @@ pip install pysqlcipher3
 export NYX_SQLCIPHER_KEY="your-strong-password"
 ```
 
-The database file (`nyx.db`) is encrypted with the key. Without the key, the file is unreadable. Recommended for: enterprise deployments, compliance (PCI-DSS §3.4, GDPR Art. 32), and shared environments.
+The database file (`nyx.db`) is encrypted with the key. Without the key, the file is unreadable. Recommended for: production deployments, compliance (PCI-DSS §3.4, GDPR Art. 32), and shared environments.
 
 ### Prometheus Metrics
 
