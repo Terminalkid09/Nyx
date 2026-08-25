@@ -195,7 +195,9 @@ class DHCPSpoofer:
             except OSError:
                 pass
         if self._thread:
-            self._thread.join(timeout=5)
+            # Cap the join: the receive thread exits promptly once the stop
+            # event is set; 5s here made MITM stop feel sluggish on the UI.
+            self._thread.join(timeout=2)
             self._thread = None
         logger.info("Rogue DHCP stopped")
         # Clients still hold a lease naming US as gateway. Start the bounded

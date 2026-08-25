@@ -351,14 +351,21 @@ class ARPSpoofer:
         "suspicious network activity" alerts on the phone.
         """
         try:
-            gateway_mac = await asyncio.to_thread(_get_mac, self.gateway_ip)
+            # Resolve the gateway and ALL targets in parallel with a short
+            # timeout: on stop the UI waits for this, and a sleeping/offline
+            # target used to cost its full 1.5s timeout per device, serially.
+            gw_future = asyncio.to_thread(_get_mac, self.gateway_ip, 0.8)
+            targets_future = [
+                asyncio.to_thread(_get_mac, ip, 0.8) for ip in self.target_ips
+            ]
+            gateway_mac = await gw_future
+            targets_mac = await asyncio.gather(*targets_future)
             if not gateway_mac:
                 logger.warning(
                     "Could not resolve MAC for gateway %s — cannot restore ARP",
                     self.gateway_ip,
                 )
-            for target_ip in self.target_ips:
-                target_mac = await asyncio.to_thread(_get_mac, target_ip)
+            for target_ip, target_mac in zip(self.target_ips, targets_mac):
                 if target_mac and gateway_mac:
                     from scapy.all import ARP, send
                     # Send 3 times for reliability
