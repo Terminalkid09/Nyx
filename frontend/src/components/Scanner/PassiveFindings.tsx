@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ExternalLink, RefreshCw } from 'lucide-react'
+
 import { apiClient } from '../../api/client'
 import { useFindingsStore } from '../../store/useFindingsStore'
 import { useProxyStore } from '../../store/useProxyStore'
@@ -70,7 +70,7 @@ export function PassiveFindings() {
     }
   }, [requests, navigate])
 
-  const retest = useCallback(async (findingId: string) => {
+  const _retest = useCallback(async (findingId: string) => {
     setRetesting((prev) => ({ ...prev, [findingId]: 'loading' }))
     try {
       const { data } = await apiClient.get(`/api/triage/findings/${findingId}/retest`)
