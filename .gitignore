@@ -66,6 +66,8 @@ nyx_reports/
 # Desktop artifacts
 desktop/dist/
 desktop/dist_*/
+desktop/dist-*/
+desktop/distnew*/
 desktop/build/
 desktop/build-output/
 desktop/release/
@@ -73,6 +75,27 @@ desktop/out/
 desktop/node_modules/
 desktop/backend/
 desktop/package.bak.json
+
+# Electron installer outputs
+desktop/dist_n*/
+*.blockmap
+*.yml
+!desktop/nyx-backend.spec
+
+# Frontend dist (root level — not desktop/dist)
+frontend/dist/
+
+# Nyx runtime
+test_stdout.log
+test_stderr.log
+*.nyx
+*.bloom
+startup.log
+startup.err
+
+# Database backups
+*.db.bak
+*.backup
 
 # Collaborator (Go)
 collaborator/collaborator
@@ -101,11 +124,19 @@ nyx.db-wal
 
 # Test artifacts
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 htmlcov/
 .coverage
 coverage.xml
 *.coveragerc
 tests/__pycache__/
+
+# Local build output (root dist/ + versioned installer copies)
+/dist/
+/dist-v*/
+test_stdout.log
+test_stderr.log
 
 # GitHub Actions
 !.github/

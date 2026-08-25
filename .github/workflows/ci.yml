@@ -19,16 +19,28 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python dependencies
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements-dev.txt
 
       - name: Run unit tests
         working-directory: .
         run: |
-          python -m pytest tests/test_auth_keeper.py \
-                           tests/test_idor_check.py \
-                           tests/test_content_discovery.py \
+          python -m pytest tests/test_activity_monitor.py \
+                           tests/test_audit.py \
+                           tests/test_scanner_advanced.py \
+                           tests/test_scanner_oast_context_depth.py \
+                           tests/test_auth_keeper.py \
                            tests/test_auto_exploit.py \
+                           tests/test_benchmarks.py \
+                           tests/test_collaborator.py \
+                           tests/test_compliance.py \
+                           tests/test_content_discovery.py \
+                           tests/test_dhcp_spoof.py \
+                           tests/test_enterprise_fixes.py \
+                           tests/test_idor_check.py \
+                           tests/test_proxy_addons.py \
                            tests/test_recommender.py \
+                           tests/test_shutdown.py \
+                           tests/test_traffic_features.py \
                            -q --timeout=60 -x --asyncio-mode=auto \
                            --tb=short
         env:
@@ -46,7 +58,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python dependencies
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements-dev.txt
 
       - name: Run full backend test suite
         working-directory: .
@@ -78,10 +90,15 @@ jobs:
             backend/modules/scanner/active/checks/idor.py \
             backend/modules/content_discovery/service.py \
             backend/modules/automations/param_chain.py \
+            backend/modules/compliance/reporter.py \
+            backend/core/metrics.py \
+            backend/core/audit.py \
+            backend/core/storage/encrypted.py \
+            backend/api/routes/compliance.py \
             -q
 
   frontend:
-    name: Frontend Build & Type Check
+    name: Frontend Build, Type Check, Lint & Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +117,14 @@ jobs:
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
+
+      - name: Lint (errors fail the build; warnings are tracked debt)
+        working-directory: frontend
+        run: npx eslint src --ext .ts,.tsx --max-warnings 10000
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
 
       - name: Build frontend
         working-directory: frontend
