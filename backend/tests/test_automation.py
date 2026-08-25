@@ -13,11 +13,14 @@ def engine():
 
 class TestAutoScanEngine:
     def test_initial_state(self, engine):
+        # Active auto-scanning must be OFF by default: a full active scan on
+        # every captured URL froze the backend (health ~13s, UI dead).
         assert engine._running is False
         assert engine._learning_mode is True
-        assert engine.auto_active_scan is True
-        assert engine.max_concurrent_active_scans == 3
+        assert engine.auto_active_scan is False
+        assert engine.max_concurrent_active_scans == 1
         assert engine.scan_delay_ms == 500
+        assert engine.max_params_per_scan == 12
 
     def test_start_stop(self, engine):
         import asyncio
@@ -72,8 +75,8 @@ class TestAutoScanEngine:
 
     def test_get_config(self, engine):
         cfg = engine.get_config()
-        assert cfg["auto_active_scan"] is True
-        assert cfg["max_concurrent"] == 3
+        assert cfg["auto_active_scan"] is False
+        assert cfg["max_concurrent"] == 1
         assert cfg["scan_delay_ms"] == 500
 
     def test_update_config(self, engine):
@@ -94,6 +97,21 @@ class TestAutoScanEngine:
     def test_enqueue_scan_lower_priority(self, engine):
         engine._enqueue_scan("https://example.com/page?q=1", ["q"], {})
         assert engine.pending_queue[0]["priority"] == 1
+
+    def test_enqueue_scan_caps_params(self, engine):
+        # URLs with many params (video streams had 17+) used to multiply the
+        # request count by 148 checks each — cap them.
+        params = [f"p{i}" for i in range(30)]
+        engine._enqueue_scan("https://example.com/video?x=1", params, {})
+        assert len(engine.pending_queue[0]["params"]) == engine.max_params_per_scan
+
+    def test_scan_url_uses_fast_depth(self, engine):
+        import asyncio
+        engine.active_scanner.run_checks = AsyncMock(return_value=[])
+        item = {"url": "https://example.com/p?q=1", "params": ["q"]}
+        asyncio.run(engine._scan_url(item))
+        _, kwargs = engine.active_scanner.run_checks.call_args
+        assert kwargs.get("depth") == "fast"
 
 
 class TestAutoScopeLearning:
