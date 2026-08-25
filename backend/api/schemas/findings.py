@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 import uuid
 from datetime import datetime
+
+from api.schemas._time import serialize_utc
 
 
 class FindingResponse(BaseModel):
@@ -18,6 +20,11 @@ class FindingResponse(BaseModel):
     cvss_score: float | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at")
+    def _serialize_created_at(self, value: datetime) -> str:
+        """Emit an explicit UTC offset (see api.schemas._time)."""
+        return serialize_utc(value)
 
 
 class FindingListResponse(BaseModel):

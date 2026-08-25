@@ -924,6 +924,37 @@ async def mitm_stop():
     )
 
 
+def _activity_for_targets(engine) -> list[dict]:
+    """Activity snapshot restricted to the currently selected targets.
+
+    The ActivityTracker records every flow that reaches the proxy, which
+    includes devices with *leftover* ARP caches from previous sessions (their
+    traffic still flows through Nyx even though they are no longer targets).
+    The monitor is labelled "domains contacted by each target", so it should
+    only show the devices the user actually selected.
+    """
+    global _spoofer, _ndp_spoofer, _dhcp_spoofer
+    targets: set[str] = set()
+    if _spoofer is not None:
+        targets.update(getattr(_spoofer, "target_ips", []) or [])
+    if _ndp_spoofer is not None:
+        targets.update(getattr(_ndp_spoofer, "target_ips", []) or [])
+    if _dhcp_spoofer is not None:
+        leases = getattr(_dhcp_spoofer, "granted_leases", []) or []
+        targets.update(l.get("ip") for l in leases if l.get("ip"))
+        # NOTE: DHCP targets are identified by MAC, so until a lease is
+        # granted the monitor stays empty (no IP to match yet) — honest.
+    if engine is None:
+        return []
+    snapshot = engine.activity_snapshot() or []
+    if not targets:
+        return snapshot[:60]
+    filtered = [e for e in snapshot if e.get("ip") in targets]
+    # If every entry was filtered out, the phone is probably on a new DHCP IP
+    # — surface that instead of showing an empty monitor.
+    return filtered[:60]
+
+
 @router.get("/status")
 async def mitm_status():
     global _spoofer, _dns_spoofer, _ndp_spoofer, _dhcp_spoofer
@@ -1009,7 +1040,10 @@ async def mitm_status():
         "quic_blocked_packets": quic_dropped_count(),
         # Live per-target activity (SNI + HTTP hosts, most recent first) —
         # works even when the target has NOT installed the Nyx CA.
-        "activity": _engine.activity_snapshot()[:60] if _engine else [],
+        # Filtered to the *selected* targets: the tracker records every device
+        # whose traffic flows through the proxy (leftover ARP caches from past
+        # sessions included), which made the monitor show unrelated phones.
+        "activity": _activity_for_targets(_engine) if _engine else [],
         "dns_spoofing": dns_running,
         "dns_spoof_error": _dns_spoof_error,
         "target_ips": _spoofer.target_ips if _spoofer else (_ndp_spoofer.target_ips if _ndp_spoofer else []),
