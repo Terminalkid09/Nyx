@@ -4,6 +4,8 @@ import logging
 from typing import TYPE_CHECKING
 from mitmproxy import http
 
+from core.utils.text import safe_decode
+
 if TYPE_CHECKING:
     from core.proxy.engine import ProxyEngine
 
@@ -24,7 +26,24 @@ NOISE_PATHS = {
     "/success.txt", "/connecttest.txt", "/ncsi.txt", "/generate_204",
 }
 
-_MAX_HEX_BYTES = 50 * 1024  # cap hex output to ~100KB chars
+# Header names that contain authentication material. The values are replaced
+# with ``[REDACTED]`` before being written to persistent storage (DB) or
+# broadcast over WebSocket — both of which outlive the process.
+_SENSITIVE_HEADERS = {
+    "authorization", "cookie", "set-cookie", "x-api-key",
+    "proxy-authorization", "x-auth-token", "x-csrf-token",
+    "x-xsrf-token", "session", "x-session-id",
+}
+
+
+def _redact_headers(headers: dict) -> dict:
+    """Return a copy of *headers* with sensitive values replaced."""
+    if not headers:
+        return headers
+    return {
+        k: ("[REDACTED]" if k.lower() in _SENSITIVE_HEADERS else v)
+        for k, v in headers.items()
+    }
 
 
 class LoggerAddon:
@@ -56,14 +75,24 @@ class LoggerAddon:
             return
         if self._is_noise(flow):
             return
-        if not self.engine.capture_active:
-            return
+        # NOTE: We intentionally do NOT gate on capture_active here.
+        # During transparent MITM (ARP/DHCP/NDP spoofing), the browser-based
+        # capture toggle is irrelevant — target traffic flows through the proxy
+        # at the OS level and MUST be logged for the MITM to be useful.
+        # The toggle only affects the UI's "Pause capture" button for manual
+        # proxy mode; transparent mode always captures.
         self._request_start_times[id(flow)] = time.monotonic()
         request_id = uuid.uuid4()
         flow.metadata["nyx_request_id"] = str(request_id)
         flow.metadata["nyx_session_id"] = self.engine.current_session_id
 
-        body = self._safe_decode(flow.request.content, flow.request.headers.get("content-type", ""))
+        # Prometheus metrics
+        from core.metrics import registry as _metrics
+        _metrics.inc("proxy_requests_total")
+        if flow.request.scheme == "https":
+            _metrics.inc("proxy_requests_https_total")
+
+        body = safe_decode(flow.request.content, flow.request.headers.get("content-type", ""))
         truncated = False
         if body and len(body) > self.max_body_size:
             body = body[:self.max_body_size]
@@ -77,7 +106,7 @@ class LoggerAddon:
             "url": flow.request.pretty_url,
             "host": flow.request.pretty_host,
             "path": flow.request.path,
-            "request_headers": dict(flow.request.headers),
+            "request_headers": _redact_headers(dict(flow.request.headers)),
             "request_body": body,
             "is_body_truncated": truncated,
         }
@@ -94,7 +123,21 @@ class LoggerAddon:
             return
         request_id = uuid.UUID(raw_id)
 
-        body = self._safe_decode(flow.response.content, flow.response.headers.get("content-type", ""))
+        # Prometheus metrics
+        from core.metrics import registry as _metrics
+        _metrics.inc("proxy_responses_total")
+        if flow.response.status_code:
+            if 200 <= flow.response.status_code < 300:
+                _metrics.inc("proxy_responses_2xx_total")
+            elif 400 <= flow.response.status_code < 500:
+                _metrics.inc("proxy_responses_4xx_total")
+            elif 500 <= flow.response.status_code < 600:
+                _metrics.inc("proxy_responses_5xx_total")
+        # This is a gauge holding the *last* response time (not a moving
+        # average). The name "_last" avoids misleading Prometheus users.
+        _metrics.set("proxy_response_time_ms_last", elapsed_ms)
+
+        body = safe_decode(flow.response.content, flow.response.headers.get("content-type", ""))
         truncated = False
         if body and len(body) > self.max_body_size:
             body = body[:self.max_body_size]
@@ -106,7 +149,7 @@ class LoggerAddon:
             "session_id": flow.metadata.get("nyx_session_id"),
             "status": flow.response.status_code,
             "reason": flow.response.reason,
-            "headers": dict(flow.response.headers),
+            "headers": _redact_headers(dict(flow.response.headers)),
             "body": body,
             "content_type": flow.response.headers.get("content-type"),
             "size_bytes": len(flow.response.content),
@@ -116,21 +159,10 @@ class LoggerAddon:
             "url": flow.request.pretty_url,
             "host": flow.request.pretty_host,
             "path": flow.request.path,
-            "request_headers": dict(flow.request.headers),
-            "request_body": self._safe_decode(flow.request.content, flow.request.headers.get("content-type", "")),
+            "request_headers": _redact_headers(dict(flow.request.headers)),
+            "request_body": safe_decode(
+                flow.request.content,
+                flow.request.headers.get("content-type", ""),
+            ),
         }
         self.engine.emit_event(event)
-
-    def _safe_decode(self, content: bytes | None, content_type: str = "") -> str | None:
-        if not content:
-            return None
-        ct = content_type.lower().split(";")[0].strip() if content_type else ""
-        if ct and not ct.startswith("text/") and ct not in (
-            "application/json", "application/xml", "application/xhtml+xml",
-            "application/javascript", "application/ld+json", "application/graphql",
-        ):
-            return content[:_MAX_HEX_BYTES].hex()
-        try:
-            return content.decode("utf-8", errors="replace")
-        except Exception:
-            return content[:_MAX_HEX_BYTES].hex()

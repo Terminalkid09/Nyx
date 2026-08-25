@@ -58,8 +58,6 @@ class AutoScanEngine:
 
         self._add_discovered(url, 'request', event)
 
-        await self._run_passive(event)
-
         new_params = self._extract_new_params(url)
         if new_params and self.auto_active_scan:
             self._enqueue_scan(url, new_params, event)
@@ -69,8 +67,6 @@ class AutoScanEngine:
             self._add_discovered(u, 'request_extracted', event)
 
     async def _on_response_received(self, event: dict):
-        await self._run_passive(event)
-
         body = event.get('body', '') or ''
         extracted = self._extract_urls_from_body(body, event.get('content_type', ''))
         for u in extracted:
@@ -84,12 +80,6 @@ class AutoScanEngine:
         redirect_url = self._get_redirect_url(event)
         if redirect_url:
             self._add_discovered(redirect_url, 'redirect', event)
-
-    async def _run_passive(self, event: dict):
-        try:
-            await self.passive_scanner._on_response(event)
-        except Exception as e:
-            logger.error("Passive scan error: %s", e)
 
     def _add_discovered(self, url: str, source: str, event: dict):
         if url not in self.discovered_urls:

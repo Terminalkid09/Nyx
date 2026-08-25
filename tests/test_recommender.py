@@ -53,12 +53,28 @@ def test_xss_finding_generates_recommendations():
     engine = RecommendationEngine(bus)
 
     import asyncio
-    asyncio.run(engine._on_finding_created(_make_event("CWE-79", "medium", "Reflected XSS")))
+    # High severity: unlocks both fuzz_param and generate_exploit for CWE-79.
+    # (generate_exploit requires min_severity="high" — see the info-severity
+    # test below; a medium XSS only suggests fuzzing.)
+    asyncio.run(engine._on_finding_created(_make_event("CWE-79", "high", "Reflected XSS")))
 
     recs = engine.get_recommendations()
     rule_ids = [r["rule_id"] for r in recs]
     assert "fuzz_param" in rule_ids, "XSS should suggest fuzzing"
     assert "generate_exploit" in rule_ids, "XSS should suggest exploit"
+
+
+def test_medium_xss_does_not_suggest_exploit():
+    bus = EventBus()
+    engine = RecommendationEngine(bus)
+
+    import asyncio
+    asyncio.run(engine._on_finding_created(_make_event("CWE-79", "medium", "Reflected XSS")))
+
+    recs = engine.get_recommendations()
+    rule_ids = [r["rule_id"] for r in recs]
+    assert "fuzz_param" in rule_ids, "Medium XSS should still suggest fuzzing"
+    assert "generate_exploit" not in rule_ids, "Exploit requires high severity"
 
 
 def test_info_severity_skips_high_severity_rules():

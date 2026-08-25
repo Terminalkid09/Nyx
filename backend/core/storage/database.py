@@ -6,14 +6,25 @@ from core.storage.models import Base
 
 logger = logging.getLogger(__name__)
 
-_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+# Optional: configure SQLCipher encryption at-rest if NYX_SQLCIPHER_KEY is set.
+from core.storage.encrypted import configure_sqlcipher_engine, is_sqlcipher_available
+
+_db_url = settings.DATABASE_URL
+if is_sqlcipher_available():
+    # Replace the plain sqlite driver with sqlcipher-aware driver
+    _db_url = _db_url.replace("sqlite+aiosqlite://", "sqlite+pysqlcipher://")
+    logger.info("SQLCipher driver detected — database will be encrypted at rest")
+
+_is_sqlite = _db_url.startswith("sqlite")
 _connect_args = {"check_same_thread": False} if _is_sqlite else {}
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _db_url,
     echo=settings.DEBUG,
     connect_args=_connect_args,
     **( {} if _is_sqlite else {"pool_size": 20, "max_overflow": 10} ),
 )
+# Inject PRAGMA key if SQLCipher is active
+configure_sqlcipher_engine(engine)
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

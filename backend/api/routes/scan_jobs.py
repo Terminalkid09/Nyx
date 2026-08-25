@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select
 from pydantic import BaseModel
 import uuid
 
@@ -56,8 +56,8 @@ async def create_scan_job(body: ScanJobCreate, db: AsyncSession = Depends(get_db
 @router.get("", response_model=list[ScanJobResponse])
 async def list_scan_jobs(
     status: str | None = Query(None),
-    sort_by: str = Query("created_at", regex="^(created_at|priority|status|scan_type)$"),
-    order: str = Query("desc", regex="^(asc|desc)$"),
+    sort_by: str = Query("created_at", pattern="^(created_at|priority|status|scan_type)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(ScanJob)
@@ -77,12 +77,22 @@ async def get_scan_queue(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(ScanJob)
         .where(ScanJob.status.in_(["pending", "running"]))
-        .order_by(
-            text("CAST(config->>'priority' AS INTEGER) DESC NULLS LAST"),
-            ScanJob.created_at.asc(),
-        )
     )
-    return [_job_to_response(j) for j in result.scalars().all()]
+    jobs = list(result.scalars().all())
+
+    # Priority ordering is done in Python: JSON-path ORDER BY expressions are
+    # dialect-specific (the previous PostgreSQL `config->>'priority'` syntax
+    # broke on the default SQLite backend). Queue sizes are small, so this is
+    # cheap and portable across every supported database.
+    def _priority(job: ScanJob) -> int:
+        config = job.config if isinstance(job.config, dict) else {}
+        try:
+            return int(config.get("priority", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    jobs.sort(key=lambda j: (-_priority(j), j.created_at or datetime.min))
+    return [_job_to_response(j) for j in jobs]
 
 
 @router.get("/{job_id}", response_model=ScanJobResponse)
