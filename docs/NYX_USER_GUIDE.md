@@ -91,7 +91,7 @@ For intercepting traffic from other devices:
 1. Go to **MITM** from the sidebar
 2. **Scan Network** (or type the **Target IP**, e.g. phone on same WiFi)
 3. Set **Gateway IP** (your router)
-4. Choose the interception method: **Auto** (default) = rogue DHCP first (stealth, no "suspicious network" alert), with automatic **ARP fallback** if DHCP does not convert within ~20s; **ARP** = instant spoofing but the target may show a "suspicious network" alert; **DHCP** = rogue DHCP only
+4. Choose the interception method: **Auto** (default) = rogue DHCP first (stealth, no "suspicious network" alert), with automatic **ARP fallback** if DHCP does not convert within ~20s; **ARP** = instant spoofing but the target may show a "suspicious network" alert (pick **ARP mode: Reactive** to answer only when the target asks — no flooding, virtually undetectable); **DHCP** = rogue DHCP only; **WiFi AP mode** = Nyx creates its own hotspot (**Nyx** SSID) — the target connects to you and you become the legitimate gateway, so no spoofing occurs at all and even client-isolated networks work
 5. Enable **DNS Spoof** if needed
 6. Click **Start**
 

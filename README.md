@@ -42,7 +42,7 @@
 | **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
 | **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
 | **OAST** | Self-hosted Collaborator server (Go) for blind XXE/SSRF/DNS exfiltration detection |
-| **Advanced MITM** | ARP/DHCP/NDP spoofing with auto-fallback, rogue-DHCP-first stealth mode with post-stop lease healing (targets recover in seconds), network device discovery, always-on CA portal with QR install, QUIC/HTTP3 blocking, gRPC parsing (native C++ module) |
+| **Advanced MITM** | ARP/DHCP/NDP spoofing with auto-fallback, rogue-DHCP-first stealth mode with post-stop lease healing (targets recover in seconds), **reactive ARP** (sniff-and-reply, undetectable), **RA spoofing (IPv6)**, **WiFi AP mode** (rogue hotspot — the target connects to you, zero spoofing), network device discovery, always-on CA portal with QR install, QUIC/HTTP3 blocking, gRPC parsing (native C++ module) |
 | **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
 | **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
@@ -405,13 +405,17 @@ Record a login sequence → Nyx analyzes JWT tokens, brute-forces weak secrets, 
 ### 🛡️ Advanced: Network MITM
 
 #### MITM (Man-in-the-Middle)
-Intercept traffic from any device on the same LAN **without configuring the target's proxy settings.** Three interception modes:
+Intercept traffic from any device on the same LAN **without configuring the target's proxy settings.** Four interception modes:
 
 | Mode | How it works | "Suspicious network" alert on target |
 |------|--------------|--------------------------------------|
 | **Auto** (default) | Rogue DHCP server first (stealth); if the target does not take the lease within ~20s, **ARP spoofing starts automatically** as fallback | Only if ARP fallback kicks in |
-| **ARP** | Classic ARP spoofing — instant interception | Yes (Android/iOS detect it) |
+| **ARP — Classic** | Classic ARP spoofing (periodic flooding) — instant interception | Yes (Android/iOS detect it) |
+| **ARP — Reactive** | **Stealth ARP**: no flooding — Nyx listens and answers only when the target asks "who is the gateway?" — ~10x less traffic, looks like normal ARP | No (recommended default for modern phones) |
 | **DHCP** | Rogue DHCP server only — target must forget & rejoin the Wi-Fi once | No |
+| **WiFi AP mode** | Turns the NIC into a rogue hotspot (**Nyx** SSID); the target connects to *you* and you ARE the legitimate gateway/DHCP/DNS — nothing to spoof, works even with client isolation | No (by design — you are the router) |
+
+**IPv6 targets** are handled with **RA (Router Advertisement) spoofing** — forged RAs elect Nyx as the target's IPv6 router legitimately, so IPv6 traffic is intercepted without NDP detection.
 
 **How to use:**
 1. Launch Nyx **as administrator**
