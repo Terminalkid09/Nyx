@@ -11,6 +11,7 @@ import {
   NetworkDevice,
 } from '../../api/endpoints/mitm'
 import { useMitmStore } from '../../store/useMitmStore'
+import { useSessionStore } from '../../store/useSessionStore'
 import { DeployBox } from './DeployBox'
 import { DhcpStatusPanel } from './DhcpStatusPanel'
 import { ActivityMonitor } from './ActivityMonitor'
@@ -164,12 +165,24 @@ export function MitmPage() {
     }
   }
 
+  const errText = (e: any, fallback: string) => {
+    const timedOut =
+      e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || '')
+    if (timedOut)
+      return (
+        `${fallback} timed out after 120s. The backend is still working — ` +
+        `wait a few seconds and check the status. If it was a Stop, the ` +
+        `session is being torn down in the background and will finish on its own.`
+      )
+    return e?.response?.data?.detail || e?.message || fallback
+  }
+
   const handleStart = async () => {
     if (selectedIps.size === 0) return
     setLoading(true)
     setError(null)
     try {
-      await startMitm({
+      const res = await startMitm({
         target_ips: Array.from(selectedIps),
         gateway_ip: gatewayIp,
         enable_dns_spoof: enableDns,
@@ -177,11 +190,17 @@ export function MitmPage() {
         arp_mode: arpMode as 'reactive' | 'active',
         enable_wifi_ap: enableWifiAp,
       })
+      // MITM traffic is stamped with a dedicated MITM Session (backend).
+      // Switch the active session to it so the Proxy tab shows the captured
+      // traffic (and the WebSocket filter matches) — regardless of which
+      // session the UI had persisted before.
+      if (res?.session_id) {
+        useSessionStore.getState().activateSession(res.session_id).catch(() => {})
+        useSessionStore.getState().fetchSessions().catch(() => {})
+      }
       await fetchStatus()
     } catch (e: any) {
-      setError(
-        e.response?.data?.detail || e.message || 'Failed to start MITM'
-      )
+      setError(errText(e, 'Failed to start MITM'))
     } finally {
       setLoading(false)
     }
@@ -192,6 +211,8 @@ export function MitmPage() {
     setError(null)
     try {
       await stopMitm()
+      // Optimistically show the inactive panel, then let the 3s poll confirm
+      // the backend really tore everything down.
       setStatus({
         active: false,
         arp_spoofing: false,
@@ -200,10 +221,10 @@ export function MitmPage() {
         gateway_ip: null,
         admin_mode: !!(status?.admin_mode),
       })
+      await fetchStatus()
     } catch (e: any) {
-      setError(
-        e.response?.data?.detail || e.message || 'Failed to stop MITM'
-      )
+      setError(errText(e, 'Failed to stop MITM'))
+      await fetchStatus()
     } finally {
       setLoading(false)
     }

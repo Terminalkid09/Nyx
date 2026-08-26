@@ -45,11 +45,13 @@ class TestMITMModels:
             status="ok",
             message="MITM active",
             admin_mode=True,
+            session_id="11111111-1111-1111-1111-111111111111",
         )
         assert resp.model_dump() == {
             "status": "ok",
             "message": "MITM active",
             "admin_mode": True,
+            "session_id": "11111111-1111-1111-1111-111111111111",
         }
 
     def test_mitm_stop_response_model(self):

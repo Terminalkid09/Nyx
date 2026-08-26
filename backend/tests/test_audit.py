@@ -44,10 +44,10 @@ class TestLogAuditNonBlocking:
 
     def test_log_audit_queue_full_graceful(self):
         """Even with a tiny queue, log_audit should not crash on overflow."""
-        from core.audit import _audit_queue, log_audit
+        from core.audit import _get_audit_queue, log_audit
 
         # Fill the queue to capacity
-        for i in range(_audit_queue.maxsize + 10):
+        for i in range(_get_audit_queue().maxsize + 10):
             log_audit(action=f"fill.{i}", result="overflow_test")
         # Should have dropped records but not raised
 
@@ -56,11 +56,12 @@ class TestFlushAuditSync:
     """Emergency flush must drain the queue synchronously."""
 
     def test_flush_empty_queue_returns_zero(self):
-        from core.audit import _audit_queue, flush_audit_sync
+        from core.audit import _get_audit_queue, flush_audit_sync
         # Drain any records left by other tests (module-level queue is shared)
-        while not _audit_queue.empty():
+        queue = _get_audit_queue()
+        while not queue.empty():
             try:
-                _audit_queue.get_nowait()
+                queue.get_nowait()
             except Exception:
                 break
         # Now the queue is empty — flush should return 0 (not crash)

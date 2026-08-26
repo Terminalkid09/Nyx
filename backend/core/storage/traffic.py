@@ -12,6 +12,13 @@ from core.storage.models import Request, Session
 from core.config import settings
 
 DEFAULT_SESSION_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+# Dedicated session for MITM-captured traffic. MITM start stamps the proxy
+# with this fixed ID and the frontend switches the active session to it, so
+# intercepted traffic is always visible in the Proxy tab — independent of
+# whatever session the user last had persisted in the UI (the source of the
+# "MITM traffic never appears" bug: UI on Test_session, proxy stamping
+# Default Session).
+MITM_SESSION_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 logger = logging.getLogger(__name__)
 
 
@@ -151,4 +158,6 @@ async def ensure_default_session():
     async with AsyncSessionLocal() as db:
         if not await db.get(Session, DEFAULT_SESSION_ID):
             db.add(Session(id=DEFAULT_SESSION_ID, name="Default Session"))
-            await db.commit()
+        if not await db.get(Session, MITM_SESSION_ID):
+            db.add(Session(id=MITM_SESSION_ID, name="MITM Session"))
+        await db.commit()

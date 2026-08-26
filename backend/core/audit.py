@@ -45,8 +45,34 @@ class AuditRecord(Base):
 
 # ── Async writer (fire-and-forget, never blocks the caller) ─────────────────
 
-_audit_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=500)
+# Created lazily: an asyncio.Queue is bound to the event loop that created it.
+# At module import there is no running loop, and in tests the loop a queue was
+# bound to can be closed later — put_nowait then raises "Event loop is
+# closed" and crashes the caller. We (re)create the queue for the *current*
+# running loop on every access instead.
+_audit_queue: asyncio.Queue | None = None
 _audit_task: asyncio.Task | None = None
+
+
+def _get_audit_queue() -> asyncio.Queue:
+    """Return the audit queue bound to the current running loop.
+
+    The queue is recreated lazily because ``asyncio.Queue`` binds to the
+    event loop that created it: at module import there is no loop, and in
+    tests a loop the queue was bound to can be closed later — put_nowait
+    would then raise "Event loop is closed". With no running loop (sync
+    context) the existing queue is reused as-is.
+    """
+    global _audit_queue
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _audit_queue is None:
+        _audit_queue = asyncio.Queue(maxsize=500)
+    elif loop is not None and getattr(_audit_queue, "_loop", None) is not loop:
+        _audit_queue = asyncio.Queue(maxsize=500)
+    return _audit_queue
 
 
 async def _audit_worker():
@@ -55,12 +81,13 @@ async def _audit_worker():
 
     while True:
         try:
+            queue = _get_audit_queue()
             batch: list[dict] = []
             # Collect the first record, then drain whatever else is queued
-            batch.append(await _audit_queue.get())
-            while not _audit_queue.empty():
+            batch.append(await queue.get())
+            while not queue.empty():
                 try:
-                    batch.append(_audit_queue.get_nowait())
+                    batch.append(queue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
 
@@ -71,14 +98,14 @@ async def _audit_worker():
                 logger.debug("Audit trail: persisted %d record(s)", len(batch))
 
             for _ in batch:
-                _audit_queue.task_done()
+                queue.task_done()
 
         except asyncio.CancelledError:
             # Flush remaining queue before exiting
             remaining: list[dict] = []
-            while not _audit_queue.empty():
+            while not queue.empty():
                 try:
-                    remaining.append(_audit_queue.get_nowait())
+                    remaining.append(queue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
             if remaining:
@@ -131,12 +158,16 @@ def flush_audit_sync() -> int:
         _audit_task.cancel()
         _audit_task = None
 
+    queue = _audit_queue
     drained: list[dict] = []
-    while not _audit_queue.empty():
-        try:
-            drained.append(_audit_queue.get_nowait())
-        except asyncio.QueueEmpty:
-            break
+    if queue is not None:
+        # Guarded: in a sync/atexit context the queue's loop may be closed,
+        # and get_nowait would then raise RuntimeError on wake-up.
+        while not queue.empty():
+            try:
+                drained.append(queue.get_nowait())
+            except (asyncio.QueueEmpty, RuntimeError):
+                break
 
     if not drained:
         return 0
@@ -181,7 +212,7 @@ def log_audit(
 ) -> None:
     """Record an auditable action. Non-blocking — never raises."""
     try:
-        _audit_queue.put_nowait({
+        _get_audit_queue().put_nowait({
             "action": action,
             "target": target,
             "result": result,
@@ -191,3 +222,7 @@ def log_audit(
         })
     except asyncio.QueueFull:
         logger.warning("Audit queue full — dropping record: %s", action)
+    except RuntimeError:
+        # Event loop is closed (test teardown / backend shutdown). The audit
+        # trail is fire-and-forget — drop rather than crash the caller.
+        logger.debug("Audit queue unavailable (loop closed) — dropping record: %s", action)

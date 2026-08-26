@@ -55,12 +55,20 @@ export async function getMitmStatus(): Promise<MitmStatus> {
   return data
 }
 
-export async function startMitm(req: MitmStartRequest): Promise<void> {
-  await apiClient.post('/api/mitm/start', req)
+// MITM start/stop tear down and re-bring-up the transparent proxy, run
+// reachability probes and restore ARP/NDP caches — that legitimately takes
+// tens of seconds on a real LAN. The global client timeout (30s) is far too
+// short for these and made Stop look broken (request aborted client-side,
+// button flipping back to clickable while the backend was still tearing down).
+const MITM_HEAVY_TIMEOUT = 120000
+
+export async function startMitm(req: MitmStartRequest): Promise<{ session_id?: string }> {
+  const { data } = await apiClient.post('/api/mitm/start', req, { timeout: MITM_HEAVY_TIMEOUT })
+  return data
 }
 
 export async function stopMitm(): Promise<{ status: string }> {
-  const { data } = await apiClient.post('/api/mitm/stop')
+  const { data } = await apiClient.post('/api/mitm/stop', undefined, { timeout: MITM_HEAVY_TIMEOUT })
   return data
 }
 

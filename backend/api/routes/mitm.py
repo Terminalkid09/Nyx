@@ -31,6 +31,7 @@ from modules.dhcp_spoof import DHCPSpoofer, detect_subnet_mask
 from modules.ndp_spoof import NDPSpoofer, is_ipv6
 from modules.vendor_lookup import lookup_vendor_async
 from modules.ca_portal import DEFAULT_PORT as CA_PORTAL_PORT
+from core.storage.traffic import MITM_SESSION_ID
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,11 @@ _DHCP_FALLBACK_GRACE_NO_DISCOVER: float = 20.0
 _DHCP_FALLBACK_GRACE_RACE_LOST: float = 10.0
 _dhcp_fallback_task: asyncio.Task | None = None
 _dhcp_started_ts: float | None = None
+# Naive-UTC timestamp of the current MITM session start. Used to count only
+# the requests captured since THIS session began (the dedicated MITM session
+# accumulates across runs, so counting its whole history would show old data
+# as "flows captured" right after a fresh start).
+_mitm_session_started_ts: datetime | None = None
 # Background tasks (e.g. async target-MAC resolution) kept alive by reference.
 _bg_tasks: set[asyncio.Task] = set()
 
@@ -293,6 +299,7 @@ class MITMStartResponse(BaseModel):
     status: str
     message: str
     admin_mode: bool
+    session_id: str
 
 
 class MITMStopResponse(BaseModel):
@@ -510,7 +517,7 @@ async def mitm_start(req: MITMStartRequest):
 
 async def _mitm_start_locked(req: MITMStartRequest):
     global _spoofer, _dns_spoofer, _redirect_active, _dns_spoof_error, _ndp_spoofer, _dhcp_spoofer, _wifi_ap_manager
-    global _dhcp_started_ts
+    global _dhcp_started_ts, _mitm_session_started_ts
 
     if _engine is None:
         raise HTTPException(status_code=500, detail="Proxy engine not initialized")
@@ -840,6 +847,16 @@ async def _mitm_start_locked(req: MITMStartRequest):
     if _ndp_spoofer is not None:
         _metrics.inc("mitm_ndp_spoofs_total")
 
+    # Route all captured traffic into the dedicated MITM session. The
+    # frontend switches the active session to this ID when start returns, so
+    # the Proxy tab always shows intercepted traffic — no matter what session
+    # was persisted in the UI before (the cause of "MITM traffic never
+    # appears": UI on Test_session, proxy stamping Default Session).
+    _engine.current_session_id = MITM_SESSION_ID
+    # Remember when this session started so captured_flows only counts what
+    # was intercepted since the start (the MITM session accumulates forever).
+    _mitm_session_started_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+
     return MITMStartResponse(
         status="ok",
         message=(
@@ -849,6 +866,7 @@ async def _mitm_start_locked(req: MITMStartRequest):
             f"{'Warnings: ' + '; '.join(warnings) if warnings else ''}"
         ),
         admin_mode=admin,
+        session_id=str(MITM_SESSION_ID),
     )
 
 
@@ -924,6 +942,37 @@ async def mitm_stop():
     )
 
 
+def _activity_for_targets(engine) -> list[dict]:
+    """Activity snapshot restricted to the currently selected targets.
+
+    The ActivityTracker records every flow that reaches the proxy, which
+    includes devices with *leftover* ARP caches from previous sessions (their
+    traffic still flows through Nyx even though they are no longer targets).
+    The monitor is labelled "domains contacted by each target", so it should
+    only show the devices the user actually selected.
+    """
+    global _spoofer, _ndp_spoofer, _dhcp_spoofer
+    targets: set[str] = set()
+    if _spoofer is not None:
+        targets.update(getattr(_spoofer, "target_ips", []) or [])
+    if _ndp_spoofer is not None:
+        targets.update(getattr(_ndp_spoofer, "target_ips", []) or [])
+    if _dhcp_spoofer is not None:
+        leases = getattr(_dhcp_spoofer, "granted_leases", []) or []
+        targets.update(l.get("ip") for l in leases if l.get("ip"))
+        # NOTE: DHCP targets are identified by MAC, so until a lease is
+        # granted the monitor stays empty (no IP to match yet) — honest.
+    if engine is None:
+        return []
+    snapshot = engine.activity_snapshot() or []
+    if not targets:
+        return snapshot[:60]
+    filtered = [e for e in snapshot if e.get("ip") in targets]
+    # If every entry was filtered out, the phone is probably on a new DHCP IP
+    # — surface that instead of showing an empty monitor.
+    return filtered[:60]
+
+
 @router.get("/status")
 async def mitm_status():
     global _spoofer, _dns_spoofer, _ndp_spoofer, _dhcp_spoofer
@@ -931,18 +980,33 @@ async def mitm_status():
     ndp_running = _ndp_spoofer is not None and getattr(_ndp_spoofer, '_running', False)
     dhcp_running = _dhcp_spoofer is not None
     dns_running = _dns_spoofer is not None and getattr(_dns_spoofer, '_running', False)
-    # Expose how many requests the proxy has logged so the UI can show
-    # whether traffic is actually being intercepted (useful for diagnosis).
+    # How many requests the proxy has captured during the CURRENT MITM
+    # session (since the last start). The dedicated MITM session accumulates
+    # across runs, so counting its whole history would show old data as
+    # "flows captured" right after a fresh start.
     proxy_count = 0
     last_traffic_seen: str | None = None
-    if _engine and hasattr(_engine, '_master') and _engine._master:
+    if _engine:
         try:
-            flows = _engine._master.state.flows
-            proxy_count = len(flows)
-            if flows:
-                ts = getattr(flows[-1], 'last_network_timestamp', None) or getattr(flows[-1], 'timestamp_end', None)
-                if ts:
-                    last_traffic_seen = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            from sqlalchemy import func, select
+            from core.storage.database import AsyncSessionLocal
+            from core.storage.models import Request
+            from core.storage.traffic import MITM_SESSION_ID
+
+            async with AsyncSessionLocal() as db:
+                query = select(func.count(), func.max(Request.timestamp)).where(
+                    Request.session_id == MITM_SESSION_ID
+                )
+                if _mitm_session_started_ts is not None:
+                    query = query.where(Request.timestamp >= _mitm_session_started_ts)
+                result = await db.execute(query)
+                proxy_count, latest = result.one()
+                if latest is not None:
+                    # SQLite returns naive UTC datetimes — tag them so the
+                    # frontend parses the timestamp correctly.
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=timezone.utc)
+                    last_traffic_seen = latest.astimezone(timezone.utc).isoformat()
         except Exception:
             proxy_count = 0
     local_ip = _get_local_ip()
@@ -1009,7 +1073,10 @@ async def mitm_status():
         "quic_blocked_packets": quic_dropped_count(),
         # Live per-target activity (SNI + HTTP hosts, most recent first) —
         # works even when the target has NOT installed the Nyx CA.
-        "activity": _engine.activity_snapshot()[:60] if _engine else [],
+        # Filtered to the *selected* targets: the tracker records every device
+        # whose traffic flows through the proxy (leftover ARP caches from past
+        # sessions included), which made the monitor show unrelated phones.
+        "activity": _activity_for_targets(_engine) if _engine else [],
         "dns_spoofing": dns_running,
         "dns_spoof_error": _dns_spoof_error,
         "target_ips": _spoofer.target_ips if _spoofer else (_ndp_spoofer.target_ips if _ndp_spoofer else []),
