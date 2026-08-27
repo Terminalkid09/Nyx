@@ -11,6 +11,35 @@ from core.network.protocols.base import FiveTuple, TCPStream, UDPFlow
 logger = logging.getLogger(__name__)
 
 
+def _ip_layer(raw: bytes):
+    """Return the IP/IPv6 layer of a raw packet.
+
+    The capture produces layer-2 frames (Ethernet), but tests and injected/
+    synthetic packets may be bare IP datagrams — so try dissecting from L2
+    first, then fall back to parsing the bytes as a plain IP header.
+    """
+    try:
+        from scapy.all import Ether, IP, IPv6
+        eth = Ether(raw)
+        ip = eth.getlayer(IP) or eth.getlayer(IPv6)
+        if ip is not None:
+            return ip
+    except Exception:
+        pass
+    try:
+        if not raw:
+            return None
+        version = raw[0] >> 4
+        from scapy.all import IP, IPv6
+        if version == 4:
+            return IP(raw)
+        if version == 6:
+            return IPv6(raw)
+    except Exception:
+        pass
+    return None
+
+
 @dataclass
 class TCPFrame:
     """Single TCP frame in a stream."""
@@ -47,6 +76,7 @@ class TCPReassembler:
         self.timeout = timedelta(seconds=timeout)
         self._streams: dict[FiveTuple, TCPStream] = {}
         self._pending: dict[FiveTuple, list[TCPSegment]] = defaultdict(list)
+        self._out_of_order: dict[tuple, list[TCPSegment]] = defaultdict(list)
         self._client_ports: set[int] = set()
 
     def feed(self, pkt: RawPacket) -> list[TCPStream]:
@@ -62,9 +92,9 @@ class TCPReassembler:
 
     def _process_packet(self, pkt: RawPacket) -> Optional[TCPStream]:
         try:
-            from scapy.all import IP, TCP
-            ip = IP(pkt.raw_bytes)
-            if TCP not in ip:
+            from scapy.all import TCP
+            ip = _ip_layer(pkt.raw_bytes)
+            if ip is None or TCP not in ip:
                 return None
 
             tcp = ip[TCP]
@@ -93,11 +123,21 @@ class TCPReassembler:
                 else:
                     stream.server_isn = tcp.seq
 
-            if tcp.flags & 0x10:
-                if is_client:
-                    stream.client_window_scale = (tcp.window >> 14) & 0xF
-                else:
-                    stream.server_window_scale = (tcp.window >> 14) & 0xF
+            # Window scale is NOT encoded in the TCP window field — it is a
+            # TCP option (kind 3, WScale) negotiated in the SYN/SYN-ACK
+            # exchange. Reading it out of the window field produced garbage.
+            if tcp.flags & 0x02:
+                for opt_name, opt_val in tcp.options:
+                    if opt_name == "WScale":
+                        try:
+                            scale = int(opt_val)
+                        except (TypeError, ValueError):
+                            scale = 0
+                        if is_client:
+                            stream.client_window_scale = scale
+                        else:
+                            stream.server_window_scale = scale
+                        break
 
             payload = bytes(tcp.payload)
             if payload:
@@ -128,6 +168,16 @@ class TCPReassembler:
         pending.append(segment)
         pending.sort(key=lambda s: s.seq)
 
+        # Snapshot the incoming segment BEFORE merging: the merge mutates the
+        # shared segment objects in place (pending/merged), so the frame
+        # emission must use a copy of the original bytes, not the merged tail.
+        incoming = TCPSegment(
+            seq=segment.seq,
+            data=bytes(segment.data),
+            flags=segment.flags,
+            timestamp=segment.timestamp,
+        )
+
         merged = []
         for seg in pending:
             if not merged:
@@ -141,36 +191,84 @@ class TCPReassembler:
                 # Discontiguous data — keep as separate segment (gap recorded).
                 merged.append(seg)
             elif seg_end > last_end:
-                # Overlapping tail: keep the newer timestamp's bytes for the
-                # overlap region, append the non-overlapping remainder.
+                # Overlapping tail. The overlap region is the LAST `overlap`
+                # bytes of last.data — last may already span far past seg.seq,
+                # so slicing last.data[:overlap] (the old code) grabbed the
+                # wrong bytes whenever the buffer was longer than the overlap.
                 overlap = last_end - seg.seq
-                tail = seg.data[overlap:] if overlap > 0 else seg.data
                 if overlap > 0 and seg.timestamp >= last.timestamp:
-                    # Newer segment rewrites the overlap region.
-                    last.data = last.data[: max(0, overlap)] + seg.data[overlap:]
+                    # Newer segment rewrites the overlapped tail.
+                    last.data = last.data[:-overlap] + seg.data[overlap:]
                 else:
-                    last.data += tail
+                    # Older (or adjacent) segment: keep the existing overlap
+                    # bytes, append only the non-overlapping remainder.
+                    last.data += seg.data[overlap:]
                 last.timestamp = seg.timestamp if seg.timestamp >= last.timestamp else last.timestamp
-            # else: fully contained — drop the duplicate (newer timestamps win
-            # only for the tail case above; full duplicates are redundant).
+            # else: fully contained — drop the duplicate (full retransmissions
+            # carry identical bytes and add nothing).
 
         self._pending[key] = merged
-        self._emit_frames(stream, segment, is_client)
+        self._emit_frames(stream, incoming, is_client)
 
     def _emit_frames(self, stream: TCPStream, segment: TCPSegment, is_client: bool):
-        """Append a TCPFrame for the incoming segment, skipping pure retransmissions.
+        """Append a TCPFrame for the incoming segment, keeping each direction's
+        frames in strictly contiguous sequence order.
 
-        Frames are appended in chronological arrival order so decoders that
-        accumulate buffers (HTTP, DNS-over-TCP) see data in order. Segments
-        already fully covered by an earlier frame (retransmissions) are dropped.
+        Previously frames were appended in arrival order, so an out-of-order
+        segment (or joining mid-stream) gave decoders and the UI a sequence
+        that jumped backwards. Now: retransmissions (fully covered by the last
+        frame of the direction) are dropped, gaps are buffered until filled,
+        and data arriving before the current anchor is inserted in order.
         """
         if not segment.data:
             return
+        seg_start = segment.seq
+        seg_end = segment.seq + len(segment.data)
+
+        last = self._last_frame(stream, is_client)
+
+        # Fully covered by the previous frame -> pure retransmission, drop it.
+        if last is not None and last.seq_start <= seg_start and last.seq_end >= seg_end:
+            return
+
+        if last is None or seg_start == last.seq_end:
+            # First frame of the direction, or perfectly contiguous.
+            self._append_frame(stream, segment, is_client)
+            self._flush_out_of_order(stream, is_client)
+            return
+
+        if seg_start > last.seq_end:
+            # Gap in the sequence — hold until the missing bytes arrive.
+            self._out_of_order[(stream.five_tuple, is_client)].append(segment)
+            return
+
+        if seg_end <= last.seq_start:
+            # Data entirely before the current anchor (we joined mid-stream or
+            # a segment arrived late): insert in order, not after it.
+            self._insert_before_direction(stream, segment, is_client)
+            self._flush_out_of_order(stream, is_client)
+            return
+
+        # Overlaps the tail of the last frame but extends past it
+        # (e.g. [1005:1015] arriving after [1000:1010]) — emit only the
+        # uncovered part so the sequence stays contiguous.
+        if seg_end > last.seq_end:
+            uncovered = segment.data[last.seq_end - seg_start:]
+            self._append_frame(
+                stream,
+                TCPSegment(seq=last.seq_end, data=uncovered,
+                           flags=segment.flags, timestamp=segment.timestamp),
+                is_client,
+            )
+            self._flush_out_of_order(stream, is_client)
+
+    def _last_frame(self, stream: TCPStream, is_client: bool) -> Optional[TCPFrame]:
         for f in reversed(stream.frames):
-            if f.is_client == is_client and \
-               f.seq_start <= segment.seq and \
-               f.seq_end >= segment.seq + len(segment.data):
-                return
+            if f.is_client == is_client:
+                return f
+        return None
+
+    def _append_frame(self, stream: TCPStream, segment: TCPSegment, is_client: bool):
         stream.frames.append(TCPFrame(
             seq_start=segment.seq,
             seq_end=segment.seq + len(segment.data),
@@ -179,6 +277,42 @@ class TCPReassembler:
             timestamp=segment.timestamp,
             is_client=is_client,
         ))
+
+    def _insert_before_direction(self, stream: TCPStream, segment: TCPSegment, is_client: bool):
+        frame = TCPFrame(
+            seq_start=segment.seq,
+            seq_end=segment.seq + len(segment.data),
+            payload=segment.data,
+            flags=segment.flags,
+            timestamp=segment.timestamp,
+            is_client=is_client,
+        )
+        for idx, f in enumerate(stream.frames):
+            if f.is_client == is_client:
+                stream.frames.insert(idx, frame)
+                return
+        stream.frames.append(frame)
+
+    def _flush_out_of_order(self, stream: TCPStream, is_client: bool):
+        key = (stream.five_tuple, is_client)
+        buf = self._out_of_order.get(key)
+        if not buf:
+            return
+        last = self._last_frame(stream, is_client)
+        if last is None:
+            return
+        progress = True
+        while progress:
+            progress = False
+            for seg in list(buf):
+                if seg.seq == last.seq_end:
+                    self._append_frame(stream, seg, is_client)
+                    buf.remove(seg)
+                    last = stream.frames[-1]
+                    progress = True
+                    break
+        if not buf:
+            del self._out_of_order[key]
 
     def _cleanup_old_streams(self, now: datetime):
         to_remove = []
@@ -189,6 +323,11 @@ class TCPReassembler:
             del self._streams[key]
             if key in self._pending:
                 del self._pending[key]
+            # Drop any buffered out-of-order segments for both directions.
+            for side in (True, False):
+                buf_key = (key, side)
+                if buf_key in self._out_of_order:
+                    del self._out_of_order[buf_key]
 
 
 class UDPFlowTracker:
@@ -201,9 +340,9 @@ class UDPFlowTracker:
 
     def feed(self, pkt: RawPacket) -> Optional[UDPFlow]:
         try:
-            from scapy.all import IP, UDP
-            ip = IP(pkt.raw_bytes)
-            if UDP not in ip:
+            from scapy.all import UDP
+            ip = _ip_layer(pkt.raw_bytes)
+            if ip is None or UDP not in ip:
                 return None
 
             udp = ip[UDP]

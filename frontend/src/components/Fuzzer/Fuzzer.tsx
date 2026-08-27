@@ -450,7 +450,7 @@ export function Fuzzer() {
                           {wordlists.length === 0 && <option value="">No built-in wordlists found</option>}
                           {wordlists.map((wl) => (
                             // wl is an absolute path; show only the basename for readability
-                            <option key={wl} value={wl}>{wl.split(/[\/\\]/).pop()}</option>
+                            <option key={wl} value={wl}>{wl.split(/[\\\\/]/).pop()}</option>
                           ))}
                         </select>
                         <input

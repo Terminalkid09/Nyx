@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams, useLocation } from 'react-router-dom'
 import { Plus, X, History } from 'lucide-react'
 import { RequestEditor } from './RequestEditor'
-import { sendRequest, fetchTabs, createTab, closeTab, fetchTabHistory } from '../../api/endpoints/repeater'
+import { sendRequest, fetchTabs, closeTab, fetchTabHistory } from '../../api/endpoints/repeater'
 
 interface TabData {
   id: string

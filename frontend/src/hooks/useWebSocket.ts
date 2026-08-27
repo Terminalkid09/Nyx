@@ -23,10 +23,30 @@ export function useWebSocket() {
   )
 
   useEffect(() => {
-    // Load persisted proxy history for the active session so every module
-    // (ProxyLog, Repeater, Fuzzer, Comparer, ...) sees old requests right
-    // after startup, not just live traffic captured since Nyx was opened.
     let mounted = true
+    // The active session is persisted in localStorage, but the backend's
+    // proxy session stamp only changes when the user clicks a session
+    // (activateSession). After an app restart the UI can therefore sit on
+    // "Test_session" while the proxy still stamps "Default Session" — new
+    // MITM captures are then filtered out and never appear in the Proxy tab.
+    const syncProxySession = () => {
+      apiClient
+        .get('/api/proxy/session')
+        .then(({ data }) => {
+          if (activeSessionId && data.session_id !== activeSessionId) {
+            apiClient
+              .patch('/api/proxy/session', { session_id: activeSessionId })
+              .catch(() => {})
+          }
+        })
+        .catch(() => {})
+    }
+
+    // The packaged backend exe takes a few seconds to boot, so the initial
+    // calls race it and fail — leaving the proxy stamp on Default Session
+    // and the Proxy tab empty at startup. Retry once the WebSocket connects
+    // (i.e. the backend is up).
+    let historyLoaded = false
     const loadHistory = async () => {
       try {
         const { data } = await apiClient.get('/api/requests', {
@@ -36,12 +56,20 @@ export function useWebSocket() {
           clearRequests()
           // Reverse them since addRequest prepends
           data.items.slice().reverse().forEach((req: any) => addRequest(req))
+          historyLoaded = true
         }
       } catch (err) {
         console.error('Failed to load proxy history', err)
       }
     }
-    if (activeSessionId) loadHistory()
+
+    // Load persisted proxy history for the active session so every module
+    // (ProxyLog, Repeater, Fuzzer, Comparer, ...) sees old requests right
+    // after startup, not just live traffic captured since Nyx was opened.
+    if (activeSessionId) {
+      syncProxySession()
+      loadHistory()
+    }
 
     // Connect once �?" the singleton guards against double-connects
     nyxWs.connect()
@@ -85,7 +113,15 @@ export function useWebSocket() {
         if (e.session_id && e.session_id !== activeSessionId) return
         addFinding(e)
       }),
-      nyxWs.on('ws.connected', () => setWsState('connected')),
+      nyxWs.on('ws.connected', () => {
+        setWsState('connected')
+        // The backend is now up — retry the session sync and history fetch
+        // if the initial attempts failed (backend boot race).
+        if (mounted && activeSessionId) {
+          syncProxySession()
+          if (!historyLoaded) loadHistory()
+        }
+      }),
       nyxWs.on('ws.disconnected', () => setWsState('disconnected')),
       nyxWs.on('ws.error', () => setWsState('error')),
     ]

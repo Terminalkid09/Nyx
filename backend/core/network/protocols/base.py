@@ -52,6 +52,7 @@ class TCPStream:
     server_window_scale: int = 0
     start_time: Optional[datetime] = None
     last_seen: Optional[datetime] = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +88,19 @@ class ProtocolDecoder(ABC):
     def decode(self, stream: TCPStream | UDPFlow) -> Iterator[ProtocolFrame]:
         """Decode stream into protocol frames."""
         pass
+
+    # ── Optional packet-level decoding ────────────────────────────────────
+    # ARP and ICMP never appear in a TCP/UDP stream (no 5-tuple to track), so
+    # decoders that work on raw packets implement these two instead of
+    # can_decode/decode. Defaults keep stream-only decoders unaffected.
+
+    def can_decode_packet(self, pkt: "RawPacket") -> bool:
+        """Return True if this decoder can dissect the raw packet."""
+        return False
+
+    def decode_packet(self, pkt: "RawPacket") -> list[ProtocolFrame]:
+        """Decode a raw packet into protocol frames (packet-level decoders)."""
+        return []
 
 
 class DecoderRegistry:

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Plus, Bug, Puzzle, Settings2, AlertTriangle, FileText, Webhook, Lightbulb } from 'lucide-react'
+import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Puzzle, Settings2, AlertTriangle, FileText, Webhook, Lightbulb, Network as NetworkIcon } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { SessionSwitcher } from './SessionSwitcher'
 
@@ -18,6 +18,7 @@ const navGroups = [
     name: 'TRAFFIC',
     items: [
       { to: '/proxy', label: 'Proxy', icon: Shield, badgeKey: null },
+      { to: '/network', label: 'Network', icon: NetworkIcon, badgeKey: null },
       { to: '/mitm', label: 'MITM', icon: Wifi, badgeKey: null },
       { to: '/interceptor', label: 'Interceptor', icon: PauseCircle, badgeKey: null },
       { to: '/repeater', label: 'Repeater', icon: Repeat, badgeKey: null },
@@ -58,6 +59,8 @@ const navGroups = [
       { to: '/auth', label: 'Authentication', icon: Key, badgeKey: null },
       { to: '/session', label: 'Session Handling', icon: Users, badgeKey: null },
       { to: '/scan-jobs', label: 'Scan Jobs', icon: Play, badgeKey: null },
+      { to: '/compliance', label: 'Compliance', icon: FileText, badgeKey: null },
+      { to: '/metrics', label: 'Metrics', icon: Activity, badgeKey: null },
     ]
   }
 ]
@@ -87,14 +90,20 @@ export function Sidebar() {
   }
 
   return (
-    <aside className={`bg-gray-950 border-r border-gray-800 flex flex-col transition-all duration-200 ${collapsed ? 'w-14' : 'w-56'} shrink-0 overflow-hidden`}>
+    <aside
+      role="navigation"
+      aria-label="Main navigation"
+      className={`bg-gray-950 border-r border-gray-800 flex flex-col transition-all duration-200 ${collapsed ? 'w-14' : 'w-56'} shrink-0 overflow-hidden`}>
       <div className="p-3 border-b border-gray-800 flex items-center justify-between">
         {!collapsed && (
           <span className="text-sm font-bold text-purple-400 tracking-wider">NYX</span>
         )}
-        <button onClick={() => setCollapsed(!collapsed)}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
           className="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors">
-          <ChevronDown size={14} className={`transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+          <ChevronDown size={14} className={`transition-transform ${collapsed ? '-rotate-90' : ''}`} aria-hidden="true" />
         </button>
       </div>
 
@@ -110,9 +119,11 @@ export function Sidebar() {
           return (
             <div key={group.name}>
               {!collapsed && (
-                <button onClick={() => toggleGroup(group.name)}
+                <button
+                  onClick={() => toggleGroup(group.name)}
+                  aria-expanded={isExpanded}
                   className="flex items-center gap-1 px-2 py-1.5 text-[10px] text-gray-600 hover:text-gray-400 w-full transition-colors">
-                  <ChevronDown size={10} className={`transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                  <ChevronDown size={10} className={`transition-transform ${isExpanded ? '' : '-rotate-90'}`} aria-hidden="true" />
                   {group.name}
                 </button>
               )}
@@ -129,7 +140,7 @@ export function Sidebar() {
                   }
                   title={collapsed ? item.label : undefined}
                 >
-                  <item.icon size={14} className="shrink-0" />
+                  <item.icon size={14} className="shrink-0" aria-hidden="true" />
                   {!collapsed && (
                     <span className="truncate flex-1">{item.label}</span>
                   )}

@@ -14,3 +14,17 @@ apiClient.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+// In the Electron app, pick up the backend's persisted API key and send it on
+// every request. Localhost calls are accepted without a key today; this keeps
+// the shell working unchanged if the API is ever bound beyond loopback.
+if (typeof window !== 'undefined' && (window as any).nyxDesktop?.getApiKey) {
+  ;(window as any).nyxDesktop
+    .getApiKey()
+    .then((key: string | null) => {
+      if (key) {
+        apiClient.defaults.headers.common['X-API-Key'] = key
+      }
+    })
+    .catch(() => {})
+}

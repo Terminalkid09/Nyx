@@ -66,18 +66,17 @@ export function ActiveScanner() {
   }
 
   const runScan = async () => {
-    let req = null
-    let scanUrl = ''
-    let scanMethod = 'GET'
-    let scanHeaders: Record<string, string> = {}
-    let scanBody = ''
+    let scanUrl: string
+    let scanMethod: string
+    let scanHeaders: Record<string, string>
+    let scanBody: string
 
     if (useCustomUrl) {
       if (!customUrl) { setError('Enter a target URL'); return }
       scanUrl = customUrl
       scanMethod = customMethod || 'GET'
       scanHeaders = {}
-      let seen = new Set<string>()
+      const seen = new Set<string>()
       customHeaders.split('\n').forEach((line) => {
         const idx = line.indexOf(':')
         if (idx > 0) {
@@ -88,7 +87,7 @@ export function ActiveScanner() {
       })
       scanBody = customBody
     } else {
-      req = requests.find((r) => r.id === selectedReqId)
+      const req = requests.find((r) => r.id === selectedReqId)
       if (!req) {
         setError('Selected request not found. It may have been removed from the log.')
         return

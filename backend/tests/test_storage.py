@@ -1,12 +1,12 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 
 class TestTrafficStorageService:
     @pytest.fixture
     def traffic_storage(self):
         from core.storage.traffic import TrafficStorageService
-        bus = AsyncMock()
+        bus = MagicMock()  # subscribe is sync, not async — MagicMock avoids coroutine warnings
         return TrafficStorageService(bus, max_body_size=100)
 
     def test_body_truncation(self, traffic_storage):
@@ -39,7 +39,7 @@ class TestTrafficStorageService:
         assert result == "fb"
 
     def test_subscribes_to_events(self, traffic_storage):
-        bus = AsyncMock()
+        bus = MagicMock()  # sync subscribe, no coroutine
         from core.storage.traffic import TrafficStorageService
         ts = TrafficStorageService(bus, max_body_size=100)
         bus.subscribe.assert_any_call("request.captured", ts._on_request)

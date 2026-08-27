@@ -6,5 +6,3 @@ contextBridge.exposeInMainWorld('nyxDesktop', {
   setProxyCapture: (active) => ipcRenderer.send('toggle-proxy-capture', active),
   getApiKey: () => ipcRenderer.invoke('get-api-key'),
 });
-
-contextBridge.exposeInMainWorld('__NYX_API_KEY__', null);

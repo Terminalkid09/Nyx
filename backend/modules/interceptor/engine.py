@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from core.events.bus import EventBus
 from core.storage.models import InterceptorRule, InterceptedItem
+from core.utils.text import safe_decode
 from core.storage.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -225,12 +226,7 @@ class InterceptorEngine:
 
     def _safe_decode(self, content: bytes | None) -> str | None:
         """Decode bytes to UTF-8, falling back to hex on failure."""
-        if not content:
-            return None
-        try:
-            return content.decode("utf-8", errors="replace")
-        except Exception:
-            return content.hex()
+        return safe_decode(content, hex_limit=None)
 
     def clear_paused_flows(self):
         """Kill all paused flows and clear internal state (called before proxy stop/switch)."""

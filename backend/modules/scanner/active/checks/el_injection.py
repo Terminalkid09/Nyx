@@ -42,7 +42,6 @@ class ElInjectionCheck(BaseCheck):
         req = copy.deepcopy(base)
         parsed = urllib.parse.urlparse(req["url"])
         params = dict(urllib.parse.parse_qsl(parsed.query))
-        if param in params:
-            params[param] = payload
-            req["url"] = parsed._replace(query=urllib.parse.urlencode(params)).geturl()
+        params[param] = payload
+        req["url"] = parsed._replace(query=urllib.parse.urlencode(params)).geturl()
         return req

@@ -31,6 +31,10 @@ class DNSSpoofer:
         hosts only. When provided, queries from any other source (including
         the attacker's own machine) are left untouched — this keeps the local
         OS, Firefox, Nyx itself, etc. on the real DNS.
+
+        The BPF filter in _sniff_loop is also narrowed: even if ``target_ips``
+        is empty the sniffer excludes the local machine's own IP so that its
+        DNS traffic (browsers, system resolver, OpenCode) is never intercepted.
         """
         self.spoof_ip = spoof_ip
         self.listen_ip = listen_ip
@@ -140,10 +144,36 @@ class DNSSpoofer:
             logger.error("DNS spoof sniffer unavailable: %s", e)
             self._running = False
             return
+
+        # Build a precise BPF filter that:
+        # 1. Only captures UDP port 53 (DNS)
+        # 2. Excludes the local machine's own IP as source — this guarantees
+        #    that Nyx itself, Firefox, OpenCode, and the system resolver on
+        #    THIS machine are never touched by the sniffer, even if target_ips
+        #    is empty. Without this, scapy's layer-2 sniffer sees ALL DNS
+        #    traffic including the attacker's own, which can delay or block it.
         try:
-            # dst port 53 (both q and possible responses); we only answer queries.
+            from modules.arp_spoof import _get_local_ip
+            local_ip = _get_local_ip()
+        except Exception:
+            local_ip = None
+
+        if local_ip and local_ip != "127.0.0.1":
+            # Exclude the attacker's own IP as source so local DNS is untouched.
+            bpf_filter = f"udp and dst port {self.dns_port} and not src host {local_ip}"
+        else:
+            bpf_filter = f"udp and dst port {self.dns_port}"
+
+        # Also exclude this machine's loopback address from spoofing.
+        if local_ip:
+            self.target_ips.discard(local_ip)
+        self.target_ips.discard("127.0.0.1")
+
+        logger.debug("DNS sniffer BPF: '%s' (excluding local %s)", bpf_filter, local_ip)
+
+        try:
             sniff(
-                filter=f"udp and dst port {self.dns_port}",
+                filter=bpf_filter,
                 store=False,
                 prn=lambda pkt: self._handle_packet(pkt),
                 stop_filter=lambda _: self._stop_evt.is_set(),

@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 import uuid
 from datetime import datetime
+
+from api.schemas._time import serialize_utc
 
 
 class RequestResponse(BaseModel):
@@ -29,6 +31,11 @@ class RequestResponse(BaseModel):
     notes: str | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("timestamp")
+    def _serialize_timestamp(self, value: datetime) -> str:
+        """Emit timestamps with an explicit UTC offset (see api.schemas._time)."""
+        return serialize_utc(value)
 
 
 class RequestListResponse(BaseModel):

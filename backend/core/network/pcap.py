@@ -169,14 +169,19 @@ class PCAPNGWriter:
         if not self._fh:
             self.open()
 
+        # PCAPNG timestamp: 64-bit count of the interface's timestamp
+        # resolution units since the epoch. The IDB declares no if_tsresol
+        # option, so the default resolution is 10^-6 s (microseconds) and
+        # the full value is microseconds-since-epoch — NOT sec<<32 | 2^-32
+        # fraction (which Wireshark would read as seconds + millions of
+        # seconds of fraction). Integer math avoids float drift on the
+        # seconds*1e6 product.
         ts_sec = int(pkt.timestamp.timestamp())
-        ts_usec = int((pkt.timestamp.timestamp() - ts_sec) * 1_000_000)
+        ts_usec = int(round((pkt.timestamp.timestamp() - ts_sec) * 1_000_000))
+        micros = ts_sec * 1_000_000 + ts_usec
+        ts_high = (micros >> 32) & 0xFFFFFFFF
+        ts_low = micros & 0xFFFFFFFF
         pkt_len = len(pkt.raw_bytes)
-
-        # 64-bit timestamp in microseconds since epoch.
-        timestamp = (ts_sec << 32) | (ts_usec * 4294967296 // 1_000_000)
-        ts_high = (timestamp >> 32) & 0xFFFFFFFF
-        ts_low = timestamp & 0xFFFFFFFF
 
         padding = (4 - (pkt_len % 4)) % 4
         # Fixed fields (28) + data + padding + trailing length field (4).
@@ -210,6 +215,3 @@ class PCAPNGWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-
-
-from dataclasses import dataclass

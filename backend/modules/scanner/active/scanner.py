@@ -134,16 +134,20 @@ from modules.scanner.active.checks.active_jsource_exposed import ActiveJsourceEx
 from modules.scanner.active.checks.active_jwt_alg_confusion import ActiveJwtAlgConfusionCheck
 from modules.scanner.active.checks.active_kibana_check import ActiveKibanaCheck
 from modules.scanner.active.checks.active_log4shell import ActiveLog4shellCheck
+from modules.scanner.active.checks.active_oast import ActiveOastCheck
 from modules.scanner.active.checks.active_open_bucket_check import ActiveOpenBucketCheck
 from modules.scanner.active.checks.active_prometheus_check import ActivePrometheusCheck
+from modules.scanner.active.checks.active_sqli_blind import ActiveSqliBlindCheck
 from modules.scanner.active.checks.active_sqlmap_api import ActiveSqlmapApiCheck
 from modules.scanner.active.checks.active_ssti_blind import ActiveSstiBlindCheck
+from modules.scanner.active.checks.active_time_blind import ActiveTimeBlindCheck
 from modules.scanner.active.checks.active_svg_upload import ActiveSvgUploadCheck
 from modules.scanner.active.checks.active_tomcat_manager import ActiveTomcatManagerCheck
 from modules.scanner.active.checks.active_traversal_encoded import ActiveTraversalEncodedCheck
 from modules.scanner.active.checks.active_verb_tampering import ActiveVerbTamperingCheck
 from modules.scanner.active.checks.active_version_enum import ActiveVersionEnumCheck
 from modules.scanner.active.checks.active_websocket_origin import ActiveWebsocketOriginCheck
+from modules.scanner.active.checks.active_xss_context import ActiveXssContextCheck
 from modules.scanner.active.checks.active_xss_dom_based import ActiveXssDomBasedCheck
 from modules.scanner.active.checks.auth_checks import (
     ActiveAuthPrivilegeEscalationCheck,
@@ -250,7 +254,6 @@ class ActiveScanner:
             MqttInjectionCheck(),
             NosqlInjectionCheck(),
             NoSqlInjectionActiveCheck(),
-            NosqlInjectionCheck(),
             OAuthMisconfigCheck(),
             ActiveOpenRedirectCheck(),
             ParameterPollutionCheck(),
@@ -299,16 +302,20 @@ class ActiveScanner:
             ActiveJwtAlgConfusionCheck(),
             ActiveKibanaCheck(),
             ActiveLog4shellCheck(),
+            ActiveOastCheck(),
             ActiveOpenBucketCheck(),
             ActivePrometheusCheck(),
+            ActiveSqliBlindCheck(),
             ActiveSqlmapApiCheck(),
             ActiveSstiBlindCheck(),
+            ActiveTimeBlindCheck(),
             ActiveSvgUploadCheck(),
             ActiveTomcatManagerCheck(),
             ActiveTraversalEncodedCheck(),
             ActiveVerbTamperingCheck(),
             ActiveVersionEnumCheck(),
             ActiveWebsocketOriginCheck(),
+            ActiveXssContextCheck(),
             ActiveXssDomBasedCheck(),
             # Auth-specific checks
             ActiveAuthPrivilegeEscalationCheck(),
@@ -332,12 +339,19 @@ class ActiveScanner:
             logger.error("Param discovery failed for %s: %s", target_url, e)
             return []
 
-    async def run_checks(self, base_request: dict, target_params: list[str], event: dict | None = None, fingerprint_info: dict | None = None, checks_filter: list[str] | None = None) -> list[dict]:
+    async def run_checks(self, base_request: dict, target_params: list[str], event: dict | None = None, fingerprint_info: dict | None = None, checks_filter: list[str] | None = None, depth: str | None = None) -> list[dict]:
+        from modules.scanner.scan_depth import get_depth
+        depth_profile = get_depth(depth)
+
         all_results = []
         checks_to_run = self.checks
 
         if checks_filter:
             checks_to_run = [c for c in checks_to_run if c.name in checks_filter or any(f in c.name for f in checks_filter)]
+
+        # Depth-based filtering: fast profile skips heavy checks (blind/time/OAST)
+        if depth_profile.skip_check:
+            checks_to_run = [c for c in checks_to_run if not depth_profile.skip_check(c.name)]
 
         if fingerprint_info:
             selection = select_checks_for_target(fingerprint_info)
@@ -347,11 +361,23 @@ class ActiveScanner:
                 rest = [c for c in checks_to_run if c.name not in prioritize_names]
                 checks_to_run = prioritized + rest
 
+        # Depth-based payload capping: heavy checks get a reduced parameter set
+        # in fast/balanced profiles to bound the total request count.
+        max_payloads = depth_profile.max_payloads_per_param
+
         seen_findings = set()
         
         for check in checks_to_run:
             try:
-                results = await check.run(base_request, target_params)
+                # Cap parameters for heavy (slow/blind/OAST) checks
+                check_is_heavy = any(p in check.name for p in (
+                    "time_blind", "sqli_blind", "oast", "race", "log4shell",
+                ))
+                params_for_check = target_params
+                if check_is_heavy and len(target_params) > max_payloads:
+                    params_for_check = target_params[:max_payloads]
+
+                results = await check.run(base_request, params_for_check)
                 
                 # Apply CVSS and Deduplication
                 unique_results = []
@@ -375,7 +401,7 @@ class ActiveScanner:
                         unique_results.append(r)
                 
                 if unique_results and self.event_bus:
-                    await persist_results(self.event_bus, unique_results, event or base_request, check.name)
+                    await persist_results(self.event_bus, unique_results, event or base_request, check.name, source="active")
                     
                 for r in unique_results:
                     all_results.append({

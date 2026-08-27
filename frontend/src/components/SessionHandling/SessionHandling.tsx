@@ -54,7 +54,7 @@ export function SessionHandling() {
   const [editingMacro, setEditingMacro] = useState<SessionHandlingRule | null>(null)
   const [editSteps, setEditSteps] = useState<MacroStep[]>([])
   const [editStepIndex, setEditStepIndex] = useState<number>(0)
-  const [editStepExpanded, setEditStepExpanded] = useState(false)
+  const [, setEditStepExpanded] = useState(false)
 
   const requests = useProxyStore((s) => s.requests)
 
@@ -262,7 +262,7 @@ export function SessionHandling() {
     }
   }
 
-  const moveStepInMacro = (from: number, to: number) => {
+  const _moveStepInMacro = (from: number, to: number) => {
     const steps = [...editSteps]
     const [moved] = steps.splice(from, 1)
     steps.splice(to, 0, moved)

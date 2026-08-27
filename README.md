@@ -42,10 +42,13 @@
 | **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
 | **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
 | **OAST** | Self-hosted Collaborator server (Go) for blind XXE/SSRF/DNS exfiltration detection |
-| **Advanced MITM** | ARP scan + multi-target selection + DNS spoofing + captive portal + gRPC parsing (native C++ module) |
+| **Advanced MITM** | ARP/DHCP/NDP spoofing with auto-fallback, rogue-DHCP-first stealth mode with post-stop lease healing (targets recover in seconds), **reactive ARP** (sniff-and-reply, undetectable), **RA spoofing (IPv6)**, **WiFi AP mode** (rogue hotspot — the target connects to you, zero spoofing), network device discovery, always-on CA portal with QR install, QUIC/HTTP3 blocking, gRPC parsing (native C++ module) |
 | **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
 | **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
+| **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
+| **Security Hardening** | SQLCipher AES-256 encryption at-rest, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail |
+| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 620+ tests, CI/CD pipeline, Electron code signing |
 
 Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
 
@@ -61,12 +64,16 @@ Nyx is an open-source web security testing platform. It provides traffic interce
 | **Repeater** | Manually craft and replay HTTP requests with full header control |
 | **Match & Replace** | Automated request/response rewriting rules (regex supported) |
 | **WebSocket Viewer** | Inspect and replay WebSocket frames |
+| **QUIC/HTTP3 Blocking** | Drops targets' UDP/443 so QUIC-capable clients fall back to interceptable TCP/TLS — no traffic escapes the proxy |
+| **Activity Monitor** | Live per-target view of contacted domains (TLS SNI + HTTP Host) — full visibility of what each device is doing even without a trusted certificate |
+| **HAR Export** | One-click export of the captured session as HAR 1.2 (opens in Chrome DevTools, Firefox, Charles) |
 
 ### 🔍 Scanning & Discovery
 | Module | Description |
 |--------|-------------|
-| **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities |
-| **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more |
+| **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities + Wappalyzer-style tech fingerprinting + info disclosure (credit cards, SSN, API keys) |
+| **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more — with boolean-blind SQLi, time-based blind detection, context-aware XSS, and OAST |
+| **Scan Depth Profiles** | `fast` / `balanced` / `deep` — control scanner intensity (payload counts, blind/time/OAST checks) via `GET /api/active-scanner/depths` |
 | **Smart IDOR Check** | JSON-aware IDOR detection that compares schema vs values (cross-account data access) to eliminate false positives |
 | **Custom Checks** | User-defined regex/string checks with severity, run against captured requests |
 | **Content Discovery** | Directory/file brute-forcing with wildcard/catch-all baseline filtering & auto-finding for sensitive files (`.env`, `.bak`) |
@@ -398,21 +405,50 @@ Record a login sequence → Nyx analyzes JWT tokens, brute-forces weak secrets, 
 ### 🛡️ Advanced: Network MITM
 
 #### MITM (Man-in-the-Middle)
-Intercept traffic from any device on the same LAN **without configuring the target's proxy settings.** Uses ARP spoofing to redirect traffic through Nyx.
+Intercept traffic from any device on the same LAN **without configuring the target's proxy settings.** Four interception modes:
 
-**Requirements:** Admin privileges, target on same WiFi/LAN.
-**For HTTPS:** Install CA certificate on target device.
+| Mode | How it works | "Suspicious network" alert on target |
+|------|--------------|--------------------------------------|
+| **Auto** (default) | Rogue DHCP server first (stealth); if the target does not take the lease within ~20s, **ARP spoofing starts automatically** as fallback | Only if ARP fallback kicks in |
+| **ARP — Classic** | Classic ARP spoofing (periodic flooding) — instant interception | Yes (Android/iOS detect it) |
+| **ARP — Reactive** | **Stealth ARP**: no flooding — Nyx listens and answers only when the target asks "who is the gateway?" — ~10x less traffic, looks like normal ARP | No (recommended default for modern phones) |
+| **DHCP** | Rogue DHCP server only — target must forget & rejoin the Wi-Fi once | No |
+| **WiFi AP mode** | Turns the NIC into a rogue hotspot (**Nyx** SSID); the target connects to *you* and you ARE the legitimate gateway/DHCP/DNS — nothing to spoof, works even with client isolation | No (by design — you are the router) |
+
+**IPv6 targets** are handled with **RA (Router Advertisement) spoofing** — forged RAs elect Nyx as the target's IPv6 router legitimately, so IPv6 traffic is intercepted without NDP detection.
 
 **How to use:**
 1. Launch Nyx **as administrator**
 2. **MITM** tab → click **Scan Network** to auto-discover all devices on LAN
 3. Check the devices to intercept (or type IP manually via text field + _Add_)
 4. Set gateway (auto-detected) → Toggle DNS spoofing if needed
-5. Click **Start Interception** — ARP spoofs the selected targets
-6. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
-7. **Stop Interception** when done
+5. Click **Start Interception**
+6. If the target does not reconnect on its own (existing connection), the DHCP phase NAKs the target's renewal so it drops the old lease and re-negotiates — a fresh **DISCOVER** that Nyx can answer
+7. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
+8. **Stop Interception** when done
+
+> **💡 For already-connected devices:** a Wi-Fi **toggle** only renews the old lease directly with the router (which Nyx never sees). If the target is already connected, ask it to **"forget the network"** and rejoin — this forces a broadcast DISCOVER that the rogue DHCP server can win, or wait for the automatic ARP fallback.
 
 > **Scan uses a two-pass ARP probe:** fast pass (60 concurrent, 0.5s timeout) catches responsive devices, then a slow pass (20 concurrent, 1.5s timeout) probes remaining IPs. Devices with randomized MACs are identified via hostname (e.g. "S25-di-Cristian" → Samsung Galaxy S25). Multiple targets can be intercepted simultaneously.
+
+---
+
+#### Monitoring vs Decrypting a Target
+
+On any modern OS, decrypting the HTTPS traffic of a device requires that
+device to trust your certificate — there is no way around it (Android 7+
+apps even ignore user-installed CAs by default). Nyx therefore gives you two
+distinct, honest layers of visibility:
+
+| Layer | What you see | Requirement |
+|-------|-------------|-------------|
+| **Activity Monitor** (always on) | Every domain each target contacts — live, per-IP, with request counts and recency. Plus DNS queries (with DNS spoofing), plain HTTP in full, traffic volumes/timing | Nothing — works out of the box |
+| **Full decryption** | Complete request/response contents | The Nyx CA installed on the target: open `http://<nyx-ip>:18081` from the device or scan the QR shown in the app |
+
+The Activity Monitor reframes what other tools dismiss as "failed TLS
+handshakes": every ClientHello carries the hostname in clear text, so a
+transparent MITM can always tell you *where* a device is connecting — only
+*what is being said* requires its trust.
 
 ---
 
@@ -486,13 +522,26 @@ docker compose up --build -d
 ```bash
 # Backend
 cd backend
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend (separate terminal)
 cd frontend
 npm install
 npm run dev
+```
+
+### Quality gates
+
+```bash
+# Backend tests (576 tests)
+cd backend && python -m pytest tests -q --asyncio-mode=auto
+
+# Frontend: type check, lint, unit tests
+cd frontend
+npm run type-check
+npm run lint        # errors fail; warnings are tracked debt
+npm test
 ```
 
 ---
@@ -648,6 +697,63 @@ The installer will be generated in `desktop/dist/`.
 | `API_HOST` | `0.0.0.0` | API listen address |
 | `API_PORT` | `8000` | API listen port |
 | `MAX_BODY_SIZE_BYTES` | `10485760` | Max request/response body size (10 MB) |
+| `MAX_STORED_REQUESTS` | `100000` | Max intercepted requests kept in DB (0 = unlimited) |
+| `REQUEST_RETENTION_HOURS` | `168` | Hours to keep intercepted requests (7 days) |
+| `NYX_SQLCIPHER_KEY` | *(empty)* | Set to enable SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`) |
+| `LOG_FORMAT` | `text` | Set to `json` for structured JSON logging (useful for ELK/Grafana) |
+
+### Compliance Reports
+
+Nyx generates compliance reports automatically from your findings:
+
+```bash
+# OWASP Top 10 2021
+GET /api/compliance/owasp
+
+# PCI-DSS v4.0
+GET /api/compliance/pci-dss
+
+# GDPR Art. 32
+GET /api/compliance/gdpr
+
+# All frameworks combined
+GET /api/compliance/full
+
+# Quick dashboard status
+GET /api/compliance/status
+```
+
+### SQLCipher Encryption at-Rest
+
+Enable AES-256-CBC encryption for the database:
+
+```bash
+pip install pysqlcipher3
+export NYX_SQLCIPHER_KEY="your-strong-password"
+```
+
+The database file (`nyx.db`) is encrypted with the key. Without the key, the file is unreadable. Recommended for: production deployments, compliance (PCI-DSS §3.4, GDPR Art. 32), and shared environments.
+
+### Prometheus Metrics
+
+Nyx exposes a `/metrics` endpoint in Prometheus text format:
+
+```bash
+curl http://127.0.0.1:8000/metrics
+```
+
+Metrics include: `proxy_requests_total`, `proxy_responses_total`, `proxy_responses_2xx/4xx/5xx_total`, `mitm_sessions_active`, `mitm_arp/dhcp/ndp_spoofs_total`, `http_errors_5xx_total`, `nyx_process_uptime_seconds`.
+
+### Structured JSON Logging
+
+For ELK/Loki/Grafana integration:
+
+```bash
+set LOG_FORMAT=json
+Nyx.exe 2>&1 | jq .
+```
+
+Output format: `{"ts": "...", "level": "INFO", "logger": "...", "msg": "..."}`
 
 ### Proxy Configuration
 
@@ -737,6 +843,15 @@ nyx/
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Authorized Use Only
+
+Nyx is a security testing tool intended for **authorized penetration testing,
+security research, and education**. Intercepting network traffic from devices
+you do not own or do not have explicit written permission to test is **illegal**
+in most jurisdictions (computer fraud and abuse laws, wiretapping statutes).
+Install CA certificates only on devices you are authorized to test, and remove
+them when the engagement ends. The authors accept no liability for misuse.
 
 ---
 

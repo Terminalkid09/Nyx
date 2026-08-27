@@ -200,7 +200,7 @@ export function ContentDiscovery() {
           >
             <option value="">Select wordlist...</option>
             {wordlists.map((wl) => (
-              <option key={wl} value={wl}>{wl.split(/[\/\\]/).pop()}</option>
+              <option key={wl} value={wl}>{wl.split(/[\\\\/]/).pop()}</option>
             ))}
           </select>
           <input

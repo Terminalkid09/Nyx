@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import {
   PieChart, Pie, Cell, Tooltip as ReTooltip, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  BarChart, Bar, Legend,
+  BarChart, Bar,
 } from 'recharts'
 import {
-  Shield, Activity, Globe, Monitor, Plus, Play, AlertTriangle,
-  Download, XCircle, RefreshCw, Zap, Webhook, Calendar,
-  TrendingUp, Target, Bug, Server, ExternalLink, Clock, CheckCircle, HelpCircle,
+  Shield, Activity, Globe, Plus, Play, AlertTriangle,
+  Download, RefreshCw, Zap, Webhook,
+  TrendingUp, Target, Bug, Server, ExternalLink, HelpCircle,
   Lightbulb, ChevronRight, X,
 } from 'lucide-react'
 import { apiClient } from '../api/client'
@@ -483,7 +483,7 @@ export function Dashboard() {
             {s.recent_findings.length > 0 ? (
               <div className="space-y-1">
                 {s.recent_findings.slice(0, 8).map(f => (
-                  <div key={f.id} onClick={(e) => { if (!window.getSelection()?.toString()) navigate(`/scanner?finding=${f.id}`) }}
+                  <div key={f.id} onClick={() => { if (!window.getSelection()?.toString()) navigate(`/scanner?finding=${f.id}`) }}
                     className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-gray-800/50 cursor-pointer transition-colors">
                     <div className={`w-2 h-2 rounded-full ${SEVERITY_CONFIG[f.severity]?.dot || 'bg-gray-500'}`} />
                     <span className={`text-[10px] px-1 rounded ${SEVERITY_CONFIG[f.severity]?.bg || 'text-gray-400'}`}>{f.severity}</span>

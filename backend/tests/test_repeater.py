@@ -53,7 +53,7 @@ class TestRepeaterSendRequest:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.headers = {"Content-Type": "application/json"}
-        mock_resp.text = '{"ok":true}'
+        mock_resp.content = b'{"ok":true}'
         mock_resp.elapsed.total_seconds.return_value = 0.15
         mock_client = AsyncMock()
         mock_client.request.return_value = mock_resp

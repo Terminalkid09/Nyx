@@ -1,51 +1,76 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { Sidebar } from './components/Layout/Sidebar'
 import { TabBar } from './components/Layout/TabBar'
 import { ToastProvider } from './components/Toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useWebSocket } from './hooks/useWebSocket'
-import { Dashboard } from './components/Dashboard'
-import { PipelineConfig } from './components/PipelineConfig'
-import { ProxyLog } from './components/ProxyLog/ProxyLog'
-import { Repeater } from './components/Repeater/Repeater'
-import { PassiveFindings } from './components/Scanner/PassiveFindings'
-import { ActiveScanner } from './components/Scanner/ActiveScanner'
-import { Fuzzer } from './components/Fuzzer/Fuzzer'
-import { Decoder } from './components/Decoder/Decoder'
-import { RuleManager } from './components/MatchReplace/RuleManager'
-import { ApiInspector } from './components/ApiInspector/ApiInspector'
-import { Sequencer } from './components/Sequencer/Sequencer'
-import { Reporter } from './components/Reporter/Reporter'
-import { Crawler } from './components/Crawler/Crawler'
-import { Interceptor } from './components/Interceptor/Interceptor'
-import { Comparer } from './components/Comparer/Comparer'
-import { GlobalSearch } from './components/GlobalSearch/GlobalSearch'
-import { AuthTester } from './components/AuthTester/AuthTester'
-import { WebSocketViewer } from './components/WebSocketViewer/WebSocketViewer'
-import { SessionHandling } from './components/SessionHandling/SessionHandling'
-import { ProjectManager } from './components/ProjectManager/ProjectManager'
-import { ScanJobs } from './components/ScanJobs/ScanJobs'
-import { AutoScan } from './components/AutoScan/AutoScan'
-import { ContentDiscovery } from './components/ContentDiscovery'
-import { Organizer } from './components/Organizer'
-import { Inspector } from './components/Inspector'
-import { Clickbandit } from './components/Clickbandit'
-import { TargetScope } from './components/TargetScope'
-import { ProxyConfigPage } from './components/ProxyConfig'
-import { MitmPage } from './components/Mitm/Mitm'
-import OnboardingWizard from './components/OnboardingWizard'
-import { LiveAudit } from './components/LiveAudit'
-import { AutoExploit } from './components/AutoExploit/AutoExploit'
-import { Recommendations } from './components/Recommendations/Recommendations'
-import { Plugins } from './components/Plugins/Plugins'
-import { Settings } from './components/Settings/Settings'
-import { Triage } from './components/Triage/Triage'
-import { ScanPolicies } from './components/ScanPolicies/ScanPolicies'
-import { WebSocketMessages } from './components/WebSocketMessages/WebSocketMessages'
-import { Automations } from './components/Automations/Automations'
-import { AuthScan } from './components/AuthScan/AuthScan'
-import { CustomChecks } from './components/Scanner/CustomChecks'
-import { WifiOff, RefreshCw, AlertTriangle } from 'lucide-react'
+import { WifiOff, RefreshCw, AlertTriangle, Loader2 } from 'lucide-react'
+
+// Route-level code splitting: every page loads on demand so the initial
+// bundle stays small (the app has 41 routes).
+function lazyNamed<T extends Record<string, unknown>>(
+  loader: () => Promise<T>,
+  name: keyof T,
+) {
+  return lazy(() =>
+    loader().then((m) => ({ default: m[name] as React.ComponentType })),
+  )
+}
+
+const Dashboard = lazyNamed(() => import('./components/Dashboard'), 'Dashboard')
+const PipelineConfig = lazyNamed(() => import('./components/PipelineConfig'), 'PipelineConfig')
+const ProxyLog = lazyNamed(() => import('./components/ProxyLog/ProxyLog'), 'ProxyLog')
+const Repeater = lazyNamed(() => import('./components/Repeater/Repeater'), 'Repeater')
+const PassiveFindings = lazyNamed(() => import('./components/Scanner/PassiveFindings'), 'PassiveFindings')
+const ActiveScanner = lazyNamed(() => import('./components/Scanner/ActiveScanner'), 'ActiveScanner')
+const Fuzzer = lazyNamed(() => import('./components/Fuzzer/Fuzzer'), 'Fuzzer')
+const Decoder = lazyNamed(() => import('./components/Decoder/Decoder'), 'Decoder')
+const RuleManager = lazyNamed(() => import('./components/MatchReplace/RuleManager'), 'RuleManager')
+const ApiInspector = lazyNamed(() => import('./components/ApiInspector/ApiInspector'), 'ApiInspector')
+const Sequencer = lazyNamed(() => import('./components/Sequencer/Sequencer'), 'Sequencer')
+const Reporter = lazyNamed(() => import('./components/Reporter/Reporter'), 'Reporter')
+const Crawler = lazyNamed(() => import('./components/Crawler/Crawler'), 'Crawler')
+const Interceptor = lazyNamed(() => import('./components/Interceptor/Interceptor'), 'Interceptor')
+const Comparer = lazyNamed(() => import('./components/Comparer/Comparer'), 'Comparer')
+const GlobalSearch = lazyNamed(() => import('./components/GlobalSearch/GlobalSearch'), 'GlobalSearch')
+const AuthTester = lazyNamed(() => import('./components/AuthTester/AuthTester'), 'AuthTester')
+const WebSocketViewer = lazyNamed(() => import('./components/WebSocketViewer/WebSocketViewer'), 'WebSocketViewer')
+const SessionHandling = lazyNamed(() => import('./components/SessionHandling/SessionHandling'), 'SessionHandling')
+const ProjectManager = lazyNamed(() => import('./components/ProjectManager/ProjectManager'), 'ProjectManager')
+const ScanJobs = lazyNamed(() => import('./components/ScanJobs/ScanJobs'), 'ScanJobs')
+const AutoScan = lazyNamed(() => import('./components/AutoScan/AutoScan'), 'AutoScan')
+const ContentDiscovery = lazyNamed(() => import('./components/ContentDiscovery'), 'ContentDiscovery')
+const Organizer = lazyNamed(() => import('./components/Organizer'), 'Organizer')
+const Inspector = lazyNamed(() => import('./components/Inspector'), 'Inspector')
+const Clickbandit = lazyNamed(() => import('./components/Clickbandit'), 'Clickbandit')
+const TargetScope = lazyNamed(() => import('./components/TargetScope'), 'TargetScope')
+const ProxyConfigPage = lazyNamed(() => import('./components/ProxyConfig'), 'ProxyConfigPage')
+const MitmPage = lazyNamed(() => import('./components/Mitm/Mitm'), 'MitmPage')
+const OnboardingWizard = lazy(() => import('./components/OnboardingWizard'))
+const LiveAudit = lazyNamed(() => import('./components/LiveAudit'), 'LiveAudit')
+const AutoExploit = lazyNamed(() => import('./components/AutoExploit/AutoExploit'), 'AutoExploit')
+const Recommendations = lazyNamed(() => import('./components/Recommendations/Recommendations'), 'Recommendations')
+const Plugins = lazyNamed(() => import('./components/Plugins/Plugins'), 'Plugins')
+const Settings = lazyNamed(() => import('./components/Settings/Settings'), 'Settings')
+const Triage = lazyNamed(() => import('./components/Triage/Triage'), 'Triage')
+const ScanPolicies = lazyNamed(() => import('./components/ScanPolicies/ScanPolicies'), 'ScanPolicies')
+const WebSocketMessages = lazyNamed(() => import('./components/WebSocketMessages/WebSocketMessages'), 'WebSocketMessages')
+const Automations = lazyNamed(() => import('./components/Automations/Automations'), 'Automations')
+const AuthScan = lazyNamed(() => import('./components/AuthScan/AuthScan'), 'AuthScan')
+const CustomChecks = lazyNamed(() => import('./components/Scanner/CustomChecks'), 'CustomChecks')
+const Compliance = lazyNamed(() => import('./components/Compliance/Compliance'), 'Compliance')
+const Metrics = lazyNamed(() => import('./components/Metrics/Metrics'), 'Metrics')
+const Network = lazyNamed(() => import('./components/Network/Network'), 'Network')
+
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center h-full text-gray-500" role="status" aria-live="polite">
+      <Loader2 size={20} className="animate-spin mr-2" aria-hidden="true" />
+      Loading…
+    </div>
+  )
+}
 
 // ── WS Status Banner ─────────────────────────────────────────────────────────
 function WsBanner({ state }: { state: 'connected' | 'disconnected' | 'error' }) {
@@ -103,7 +128,8 @@ export default function App() {
             {/* WS connectivity banner — only visible when disconnected */}
             <WsBanner state={wsState} />
             <main className="main-content">
-              <Routes>
+              <Suspense fallback={<RouteFallback />}>
+                <Routes>
                 <Route path="/" element={<RouteErrorBoundary><Dashboard /></RouteErrorBoundary>} />
                 <Route path="/dashboard" element={<RouteErrorBoundary><Dashboard /></RouteErrorBoundary>} />
                 <Route path="/scan/new" element={<RouteErrorBoundary><PipelineConfig /></RouteErrorBoundary>} />
@@ -145,7 +171,11 @@ export default function App() {
                 <Route path="/proxy-config" element={<RouteErrorBoundary><ProxyConfigPage /></RouteErrorBoundary>} />
                 <Route path="/live-audit" element={<RouteErrorBoundary><LiveAudit /></RouteErrorBoundary>} />
                 <Route path="/mitm" element={<RouteErrorBoundary><MitmPage /></RouteErrorBoundary>} />
-              </Routes>
+                <Route path="/compliance" element={<RouteErrorBoundary><Compliance /></RouteErrorBoundary>} />
+                <Route path="/metrics" element={<RouteErrorBoundary><Metrics /></RouteErrorBoundary>} />
+                <Route path="/network" element={<RouteErrorBoundary><Network /></RouteErrorBoundary>} />
+                </Routes>
+              </Suspense>
             </main>
           </div>
         </div>

@@ -1,35 +1,15 @@
-import json
 import logging
-import os
-import secrets
 from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+from core.secrets_store import secret_key as _stored_secret_key
 
 logger = logging.getLogger(__name__)
 
-_SECRET_DIR = Path(os.environ.get("NYX_HOME") or Path(__file__).resolve().parent.parent.parent)
-_SECRET_DIR.mkdir(parents=True, exist_ok=True)
-_SECRET_FILE = _SECRET_DIR / "nyx.secret"
-
 
 def _load_secret_key() -> str:
-    data = {}
-    if _SECRET_FILE.exists():
-        try:
-            data = json.loads(_SECRET_FILE.read_text())
-            sk = data.get("secret_key", "")
-            if sk and len(sk) >= 16:
-                return sk
-        except Exception:
-            data = {}
-    sk = secrets.token_hex(32)
-    data["secret_key"] = sk
-    try:
-        _SECRET_FILE.write_text(json.dumps(data, indent=2))
-        os.chmod(str(_SECRET_FILE), 0o600)
-    except Exception as e:
-        logger.warning("Could not persist SECRET_KEY to %s: %s", _SECRET_FILE, e)
-    return sk
+    return _stored_secret_key()
 
 
 class Settings(BaseSettings):
@@ -58,6 +38,20 @@ class Settings(BaseSettings):
     # intercepted, trigger "captive portal" / "untrusted network" alerts on
     # the target device (Samsung/Google/iOS captive detection, Play Protect).
     PROXY_IGNORE_HOSTS: list[str] | None = None
+
+    # Traffic retention: how many intercepted requests to keep in the local DB
+    # before the janitor starts deleting the oldest ones. 0 = unlimited
+    # (dangerous: the DB can grow to hundreds of MB).
+    MAX_STORED_REQUESTS: int = 100_000
+    # How many hours to keep intercepted requests (0 = unlimited).
+    REQUEST_RETENTION_HOURS: int = 168  # 7 days
+
+    # Network layer (passive packet capture). NETWORK_IFACE empty means the
+    # capture engine is NOT auto-started at boot — start it via
+    # POST /api/network/capture/start instead.
+    NETWORK_IFACE: str = ""
+    NETWORK_BPF_FILTER: str = "tcp or udp"
+    NETWORK_PCAP_PATH: str = ""
 
     model_config = {"env_file": str(Path(__file__).resolve().parent.parent.parent / ".env"), "extra": "ignore"}
 

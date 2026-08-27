@@ -19,7 +19,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python dependencies
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements-dev.txt
 
       - name: Run unit tests
         working-directory: .
@@ -46,7 +46,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python dependencies
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements-dev.txt
 
       - name: Run full backend test suite
         working-directory: .
@@ -78,10 +78,15 @@ jobs:
             backend/modules/scanner/active/checks/idor.py \
             backend/modules/content_discovery/service.py \
             backend/modules/automations/param_chain.py \
+            backend/modules/compliance/reporter.py \
+            backend/core/metrics.py \
+            backend/core/audit.py \
+            backend/core/storage/encrypted.py \
+            backend/api/routes/compliance.py \
             -q
 
   frontend:
-    name: Frontend Build & Type Check
+    name: Frontend Build, Type Check, Lint & Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +105,14 @@ jobs:
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
+
+      - name: Lint (errors fail the build; warnings are tracked debt)
+        working-directory: frontend
+        run: npx eslint src --ext .ts,.tsx --max-warnings 10000
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
 
       - name: Build frontend
         working-directory: frontend

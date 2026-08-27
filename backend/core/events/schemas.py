@@ -12,7 +12,7 @@ class NyxEvent(BaseModel):
             self.timestamp = datetime.now(timezone.utc)
 
 class RequestCapturedEvent(NyxEvent):
-    type: Literal["request_captured"] = "request_captured"
+    type: Literal["request.captured"] = "request.captured"
     request_id: uuid.UUID
     session_id: uuid.UUID
     method: str

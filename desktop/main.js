@@ -24,6 +24,23 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
 });
 
+// ── Single instance ────────────────────────────────────────────────────────
+// Multiple Nyx windows spawn multiple backends that fight over ports
+// 8000/8080/8082/8085: the second backend fails to bind its proxy, and the
+// WinDivert API gets split across processes, which blackholes MITM targets.
+// Enforce exactly one running instance; further launches focus the window.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
 function getBackendDir() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'backend');
@@ -68,38 +85,10 @@ function killProcessTree(pid) {
   }
 }
 
-function getPidsOnPorts(ports) {
-  const { execSync } = require('child_process');
-  const platform = process.platform;
-  const pids = new Set();
-  try {
-    if (platform === 'win32') {
-      const out = execSync(`netstat -ano | findstr "${ports.map(p => `:${p}`).join(' ')}"`, { timeout: 3000, encoding: 'utf8' });
-      out.split('\n').forEach(line => {
-        const m = line.match(/(\d+)\s*$/);
-        if (m) pids.add(parseInt(m[1], 10));
-      });
-    } else if (platform === 'darwin') {
-      const out = execSync(`lsof -i :${ports.join(' -i :')} -P -t 2>/dev/null`, { timeout: 3000, encoding: 'utf8' });
-      out.trim().split('\n').forEach(pid => { if (pid) pids.add(parseInt(pid, 10)); });
-    } else {
-      // Linux
-      let out = '';
-      try { out = execSync(`ss -tlnp ${ports.map(p => `sport = :${p}`).join(' or ')} 2>/dev/null`, { timeout: 3000, encoding: 'utf8' }); } catch {}
-      if (!out) {
-        try { out = execSync(`netstat -tlnp 2>/dev/null`, { timeout: 3000, encoding: 'utf8' }); } catch {}
-      }
-      out.split('\n').forEach(line => {
-        const m = line.match(/pid=(\d+)/);
-        if (m) pids.add(parseInt(m[1], 10));
-      });
-    }
-  } catch {}
-  return [...pids];
-}
-
 function killOrphanBackends() {
-  // Kill by PID file
+  // Kill only the PIDs that a previous Nyx session wrote to disk. We no
+  // longer kill *any* process holding ports 8000/8080/8082 — that destroyed
+  // unrelated dev servers / services the user might be running on those ports.
   [PID_FILE, COLLAB_PID_FILE].forEach((f) => {
     try {
       const oldPid = parseInt(fs.readFileSync(f, 'utf8').trim(), 10);
@@ -109,10 +98,20 @@ function killOrphanBackends() {
       }
     } catch {}
   });
-  // Kill any process holding Nyx ports (8000, 8080, 8082)
-  getPidsOnPorts([8000, 8080, 8082]).forEach(pid => {
-    try { killProcessTree(pid); } catch {}
-  });
+  // Packaged builds: also kill any stray Nyx backend processes left over from
+  // previous multi-instance sessions (the PID-file race let several backends
+  // start at once). nyx-backend.exe / nyx-collaborator.exe are exclusively
+  // Nyx's own bundled binaries — never user processes — so killing them by
+  // image name is safe. In dev mode the backend runs as `python`, which we
+  // must NOT touch.
+  if (app.isPackaged && process.platform === 'win32') {
+    try {
+      require('child_process').execSync(
+        'taskkill /IM nyx-backend.exe /F /T 2>nul & taskkill /IM nyx-collaborator.exe /F /T 2>nul',
+        { stdio: 'ignore', timeout: 5000 }
+      );
+    } catch {}
+  }
 }
 
 let backendLogStream = null;
@@ -176,14 +175,32 @@ function startBackend() {
 }
 
 function stopBackend() {
-  if (!backendProcess) return;
-  try {
-    const pid = backendProcess.pid;
-    backendProcess.killed = true;
-    killProcessTree(pid);
-  } catch (e) {
-    console.error('Failed to stop backend:', e);
+  if (!backendProcess) {
+    try { fs.unlinkSync(PID_FILE); } catch {}
+    return;
   }
+  const pid = backendProcess.pid;
+  backendProcess.killed = true;
+
+  // 1) Graceful first: ask the backend to flush its network state (IP
+  //    forwarding, WinDivert, firewall rules, system proxy) and exit. A bare
+  //    taskkill /F would skip FastAPI's teardown and leave the OS dirty.
+  try {
+    require('child_process').execSync(
+      'curl -s -m 2 -X POST http://127.0.0.1:8000/api/shutdown',
+      { stdio: 'ignore', timeout: 2500 }
+    );
+  } catch {}
+  // 2) Give it up to ~4s to exit on its own.
+  const waitCmd = process.platform === 'win32' ? 'timeout /t 1 /nobreak >nul' : 'sleep 1';
+  for (let i = 0; i < 4; i++) {
+    let exited = false;
+    try { process.kill(pid, 0); } catch { exited = true; }
+    if (exited) break;
+    try { require('child_process').execSync(waitCmd, { stdio: 'ignore', timeout: 1500 }); } catch {}
+  }
+  // 3) Fallback: force-kill (also covers backends that never got the request).
+  killProcessTree(pid);
   backendProcess = null;
   try { fs.unlinkSync(PID_FILE); } catch {}
 }
@@ -209,7 +226,7 @@ function startCollaborator() {
   const env = {
     ...process.env,
     COLLAB_DOMAIN: 'localhost',
-    COLLAB_SECRET: 'nyx-secret',
+    COLLAB_SECRET: require('crypto').randomBytes(16).toString('hex'),
     COLLAB_HTTP_PORT: '9999',
     COLLAB_DNS_PORT: '53',
     COLLAB_API_PORT: '9090',
@@ -385,12 +402,22 @@ function createMainWindow() {
   });
 }
 
-// Only accept TLS certificates issued by the local Nyx/mitmproxy CA (the
-// proxy's MITM cert). Anything else falls through to Chromium's default
+// Only accept TLS certificates cryptographically verified against the local
+// Nyx/mitmproxy CA. Anything else falls through to Chromium's default
 // verification, so the browser does NOT globally trust arbitrary certs.
+// (Previously this matched the issuer *name*, which any attacker can forge
+// by naming their own CA "mitmproxy"/"nyx".)
 function isNyxMitmCert(req) {
-  const issuer = (req.certificate && req.certificate.issuerName ? req.certificate.issuerName : '').toLowerCase();
-  return issuer.includes('mitmproxy') || issuer.includes('nyx');
+  try {
+    const { X509Certificate } = require('crypto');
+    const caPath = path.join(os.homedir(), '.mitmproxy', 'mitmproxy-ca-cert.pem');
+    const caPem = fs.readFileSync(caPath, 'utf8');
+    const ca = new X509Certificate(caPem);
+    const leaf = new X509Certificate(req.certificate.data);
+    return leaf.issuer === ca.subject && leaf.verify(ca.publicKey);
+  } catch {
+    return false;
+  }
 }
 
 async function launchBrowser() {
@@ -511,9 +538,25 @@ app.whenReady().then(async () => {
 
   createMainWindow();
 
-  ipcMain.on('launch-browser', launchBrowser);
-  ipcMain.on('download-ca', downloadCA);
-  ipcMain.on('toggle-proxy-capture', (_event, active) => toggleProxyCapture(active));
+ipcMain.on('launch-browser', launchBrowser);
+ipcMain.on('download-ca', downloadCA);
+ipcMain.on('toggle-proxy-capture', (_event, active) => toggleProxyCapture(active));
+
+// The backend persists its API key to nyx.secret under NYX_HOME on first
+// boot. Expose it to the renderer so API calls can carry X-API-Key (needed
+// as soon as the API is ever bound beyond localhost).
+ipcMain.handle('get-api-key', () => {
+  try {
+    const secretPath = path.join(app.getPath('userData'), 'data', 'nyx.secret');
+    if (fs.existsSync(secretPath)) {
+      const data = JSON.parse(fs.readFileSync(secretPath, 'utf8'));
+      if (typeof data.api_key === 'string' && data.api_key.length >= 16) {
+        return data.api_key;
+      }
+    }
+  } catch {}
+  return null;
+});
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

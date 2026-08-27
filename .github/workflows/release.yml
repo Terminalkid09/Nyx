@@ -111,12 +111,12 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: |
-          npm install
+          npm ci
           npm run build
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install
+        run: npm ci
 
       - name: Build installer
         working-directory: desktop

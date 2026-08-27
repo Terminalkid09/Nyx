@@ -152,10 +152,13 @@ async def update_plugin(plugin_id: uuid.UUID, body: PluginUpdate, db: AsyncSessi
         raise HTTPException(404, detail="Plugin not found")
 
     old_name = plugin.name
+    # Validate the new path BEFORE mutating the row: comparing against the old
+    # *path* (not the name) is what actually detects a path change, and
+    # validating first keeps the stored row consistent when validation fails.
+    if body.path and body.path != plugin.path:
+        _validate_plugin_path(body.path)
     for key, value in body.model_dump(exclude_none=True).items():
         setattr(plugin, key, value)
-    if body.path and body.path != old_name:
-        _validate_plugin_path(body.path)
     await db.commit()
     await db.refresh(plugin)
 

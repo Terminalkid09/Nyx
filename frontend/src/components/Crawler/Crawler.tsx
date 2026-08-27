@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Globe, Play, XCircle, Settings, List, FileText, ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
-import { apiClient } from '../../api/client'
+import {  } from '../../api/client'
 import { startCrawl, stopCrawl, listCrawlJobs, getCrawlStatus, type CrawlJob } from '../../api/endpoints/crawler'
 import { useJobsStore } from '../../store/useJobsStore'
 

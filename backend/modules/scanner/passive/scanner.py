@@ -23,6 +23,8 @@ from modules.scanner.passive.checks.biz_otp_bypass import BizOtpBypassCheck
 from modules.scanner.passive.checks.biz_price_manipulation import BizPriceManipulationCheck
 from modules.scanner.passive.checks.biz_quantity import BizQuantityCheck
 from modules.scanner.passive.checks.biz_skip_step import BizSkipStepCheck
+from modules.scanner.passive.checks.passive_info_disclosure import PassiveInfoDisclosureCheck
+from modules.scanner.passive.checks.passive_tech_fingerprint import PassiveTechFingerprintCheck
 from modules.scanner.passive.checks.biz_unlimited_upload import BizUnlimitedUploadCheck
 from modules.scanner.passive.checks.cache_deception_ct import CacheDeceptionCtCheck
 from modules.scanner.passive.checks.cache_host_header import CacheHostHeaderCheck
@@ -430,6 +432,9 @@ class PassiveScanner:
             XxeSvgUploadCheck(),
             XxeXincludeCheck(),
             XxeXlsxUploadCheck(),
+            # Advanced passive checks (deepseek v4-pro)
+            PassiveInfoDisclosureCheck(),
+            PassiveTechFingerprintCheck(),
         ]
 
     def register(self):
@@ -465,6 +470,6 @@ class PassiveScanner:
                         )
                 
                 if unique_results:
-                    await persist_results(self.event_bus, unique_results, event, check.name)
+                    await persist_results(self.event_bus, unique_results, event, check.name, source="passive")
             except Exception as e:
                 logger.error("Passive check %s failed: %s", check.name, e)

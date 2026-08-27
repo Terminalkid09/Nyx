@@ -29,24 +29,23 @@ class ActiveAwsKeysCheck(BaseCheck):
                 modified = dict(base_request)
                 parsed = urlparse(modified["url"])
                 params = dict(parse_qsl(parsed.query))
-                if param in params:
-                    params[param] = "AKIAIOSFODNN7EXAMPLE"
-                    modified["url"] = parsed._replace(query=urlencode(params)).geturl()
-                    try:
-                        resp = await client.request(**modified)
-                        text = f"{resp.text} {dict(resp.headers)}"
-                        for pattern, key_type in AWS_KEY_PATTERNS:
-                            if re.search(pattern, text):
-                                results.append(CheckResult(
-                                    triggered=True,
-                                    severity="high",
-                                    title="Sensitive Key Exposed",
-                                    description=f"Potential {key_type} found in response.",
-                                    evidence=f"Pattern matched: {key_type}",
-                                    remediation="Rotate exposed keys immediately. Remove keys from source code and use env vars or secret managers.",
-                                    cwe="CWE-798",
-                                ))
-                                break
-                    except Exception:
-                        continue
+                params[param] = "AKIAIOSFODNN7EXAMPLE"
+                modified["url"] = parsed._replace(query=urlencode(params)).geturl()
+                try:
+                    resp = await client.request(**modified)
+                    text = f"{resp.text} {dict(resp.headers)}"
+                    for pattern, key_type in AWS_KEY_PATTERNS:
+                        if re.search(pattern, text):
+                            results.append(CheckResult(
+                                triggered=True,
+                                severity="high",
+                                title="Sensitive Key Exposed",
+                                description=f"Potential {key_type} found in response.",
+                                evidence=f"Pattern matched: {key_type}",
+                                remediation="Rotate exposed keys immediately. Remove keys from source code and use env vars or secret managers.",
+                                cwe="CWE-798",
+                            ))
+                            break
+                except Exception:
+                    continue
         return results

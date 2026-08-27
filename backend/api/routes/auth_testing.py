@@ -2,10 +2,7 @@ import json
 import base64
 import hmac
 import hashlib
-import struct
-import time
-from datetime import datetime, timezone, timedelta
-from typing import Literal
+from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
 from fastapi import APIRouter, HTTPException
@@ -286,6 +283,7 @@ async def oauth_debug(body: OAuthDebugRequest):
     client_id = params.get("client_id", "")
     scope = params.get("scope", "")
     response_type = params.get("response_type", "")
+    state = params.get("state", "")
 
     if redirect_uri:
         parsed_uri = urlparse(redirect_uri)

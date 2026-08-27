@@ -1,6 +1,7 @@
 """Live network statistics for UI."""
 import asyncio
 import logging
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -49,7 +50,11 @@ class StatsCollector:
         self.window_seconds = window_seconds
         self._packet_times: list[float] = []
         self._packet_sizes: list[int] = []
-        self._lock = asyncio.Lock()
+        # The capture loop runs in a background thread while get_stats() is
+        # called from the asyncio event loop, so both mutating paths must
+        # share a lock (threading.Lock works in both sync and async contexts;
+        # an asyncio.Lock would deadlock the sync record_packet path).
+        self._lock = threading.Lock()
         self._stats = NetworkStats()
         self._protocol_counters: dict[str, int] = defaultdict(int)
         self._port_counters: dict[int, int] = defaultdict(int)
@@ -59,15 +64,16 @@ class StatsCollector:
         now = time.time()
         size = len(pkt.raw_bytes) if hasattr(pkt, 'raw_bytes') else 0
 
-        self._packet_times.append(now)
-        self._packet_sizes.append(size)
-        self._stats.packets_total += 1
-        self._stats.bytes_total += size
-        self._protocol_counters[protocol] += 1
-        if port:
-            self._port_counters[port] += 1
+        with self._lock:
+            self._packet_times.append(now)
+            self._packet_sizes.append(size)
+            self._stats.packets_total += 1
+            self._stats.bytes_total += size
+            self._protocol_counters[protocol] += 1
+            if port:
+                self._port_counters[port] += 1
 
-        self._cleanup_old(now)
+            self._cleanup_old(now)
 
     def _cleanup_old(self, now: float):
         cutoff = now - self.window_seconds
@@ -78,31 +84,34 @@ class StatsCollector:
     def get_stats(self, tcp_streams: int = 0, udp_flows: int = 0) -> NetworkStats:
         """Compute current statistics."""
         now = time.time()
-        self._cleanup_old(now)
+        with self._lock:
+            self._cleanup_old(now)
 
-        window = self.window_seconds
-        if len(self._packet_times) >= 2:
-            actual_window = self._packet_times[-1] - self._packet_times[0]
-            if actual_window > 0:
-                window = actual_window
+            window = self.window_seconds
+            if len(self._packet_times) >= 2:
+                actual_window = self._packet_times[-1] - self._packet_times[0]
+                if actual_window > 0:
+                    window = actual_window
 
-        self._stats.pps = len(self._packet_times) / window if window > 0 else 0
-        self._stats.bps = sum(self._packet_sizes) / window if window > 0 else 0
-        self._stats.active_flows = tcp_streams + udp_flows
-        self._stats.tcp_streams = tcp_streams
-        self._stats.udp_flows = udp_flows
-        self._stats.by_protocol = dict(self._protocol_counters)
-        self._stats.by_port = dict(self._port_counters)
-        self._stats.timestamp = datetime.now()
+            self._stats.pps = len(self._packet_times) / window if window > 0 else 0
+            self._stats.bps = sum(self._packet_sizes) / window if window > 0 else 0
+            self._stats.active_flows = tcp_streams + udp_flows
+            self._stats.tcp_streams = tcp_streams
+            self._stats.udp_flows = udp_flows
+            self._stats.by_protocol = dict(self._protocol_counters)
+            self._stats.by_port = dict(self._port_counters)
+            self._stats.timestamp = datetime.now()
 
-        return self._stats
+            return self._stats
 
     def reset(self) -> None:
-        self._packet_times.clear()
-        self._packet_sizes.clear()
-        self._protocol_counters.clear()
-        self._port_counters.clear()
-        self._stats = NetworkStats()
+        """Reset all counters (called when a capture starts)."""
+        with self._lock:
+            self._packet_times.clear()
+            self._packet_sizes.clear()
+            self._protocol_counters.clear()
+            self._port_counters.clear()
+            self._stats = NetworkStats()
 
 
 class LiveStatsBroadcaster:
@@ -133,7 +142,11 @@ class LiveStatsBroadcaster:
                 pass
 
     def subscribe(self) -> asyncio.Queue:
-        queue = asyncio.Queue()
+        # Bounded (1 slot): a slow WebSocket consumer must never let the
+        # broadcast loop accumulate stats forever. put_nowait() can then
+        # genuinely raise QueueFull and the stale snapshot is dropped in
+        # favour of the newest one (live stats, not a backlog).
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1)
         self._subscribers.append(queue)
         return queue
 
@@ -152,7 +165,13 @@ class LiveStatsBroadcaster:
                     try:
                         queue.put_nowait(stats)
                     except asyncio.QueueFull:
-                        pass
+                        # Consumer is behind — drop the stale snapshot, keep
+                        # only the newest one.
+                        try:
+                            queue.get_nowait()
+                            queue.put_nowait(stats)
+                        except asyncio.QueueEmpty:
+                            pass
 
                 await asyncio.sleep(self.interval)
             except asyncio.CancelledError:

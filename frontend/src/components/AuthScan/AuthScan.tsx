@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Key, Plus, Trash2, Shield, Play } from 'lucide-react'
+import { Key, Plus, Trash2, Shield } from 'lucide-react'
 import { listAuthProfiles, createAuthProfile, deleteAuthProfile, runAuthScan, AuthProfile } from '../../api/endpoints/authScan'
 
 export function AuthScan() {

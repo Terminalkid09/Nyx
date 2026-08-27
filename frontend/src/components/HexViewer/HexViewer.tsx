@@ -22,7 +22,7 @@ export function HexViewer({
   data,
   highlightStart,
   highlightEnd,
-  readOnly = true,
+  readOnly: _readOnly = true,
   onByteClick,
 }: HexViewerProps) {
   const rawBytes = useMemo(() => {

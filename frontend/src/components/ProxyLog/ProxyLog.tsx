@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useReactTable, getCoreRowModel, flexRender, createColumnHelper } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ExternalLink, Radio, Loader2 } from 'lucide-react'
+import { Radio, Loader2 } from 'lucide-react'
 import { NyxRequest } from '../../types'
 import { apiClient } from '../../api/client'
 import { useProxyStore } from '../../store/useProxyStore'
@@ -27,13 +27,13 @@ export function ProxyLog() {
   const [captureActive, setCaptureActive] = useState(true)
   const [sendingToRepeater, setSendingToRepeater] = useState<string | null>(null)
 
-  const { requests, selectedId, filter, select, clearRequests, addRequest } = useProxyStore()
+  const { requests, selectedId, filter, select } = useProxyStore()
   const { setFuzzerTarget } = useFuzzerStore()
   const { setTarget: setAutoExploitTarget } = useAutoExploitStore()
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null)
   
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const _activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -219,6 +219,19 @@ export function ProxyLog() {
             <p className="text-xs mt-1">Click <strong>Capture ON</strong> above to start logging requests</p>
           </div>
         )}
+        {captureActive && requests.length === 0 && (
+          <div className="flex flex-col items-center justify-center flex-1 text-gray-500 p-4 gap-2">
+            <Radio size={36} className="text-green-400 animate-pulse" />
+            <p className="text-sm font-medium text-gray-300">Proxy is listening on port 8080</p>
+            <p className="text-xs text-gray-500">Waiting for traffic…</p>
+            <div className="mt-2 bg-gray-900 border border-gray-800 rounded-lg p-3 text-left text-[11px] text-gray-400 space-y-1 max-w-xs">
+              <p className="text-gray-300 font-medium text-xs mb-1">📌 To get started:</p>
+              <p>• <strong>Browser:</strong> configure proxy to <code className="text-purple-300">127.0.0.1:8080</code></p>
+              <p>• <strong>MITM tab:</strong> scan a network and start intercepting a target</p>
+              <p>• <strong>Stealth Mode:</strong> set a target device's proxy to <code className="text-purple-300">NYX_IP:8080</code></p>
+            </div>
+          </div>
+        )}
         {(!captureActive && requests.length > 0) && (
           <div className="px-2 py-1 bg-yellow-500/10 border-b border-yellow-500/20 text-[10px] text-yellow-400 flex items-center gap-2">
             <Radio size={10} /> Capture is paused — existing requests shown, new traffic not logged
@@ -236,7 +249,17 @@ export function ProxyLog() {
                   className={`absolute w-full flex items-center h-8 px-2 cursor-pointer border-b border-gray-900 hover:bg-gray-800 text-xs ${
                     selectedId === req.id ? 'bg-gray-700' : ''
                   } ${req.is_flagged ? 'border-l-2 border-l-yellow-400' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedId === req.id}
+                  aria-label={`${req.method} ${req.url} — ${req.response_status ?? 'pending'}`}
                   onClick={() => select(selectedId === req.id ? null : req.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      select(selectedId === req.id ? null : req.id)
+                    }
+                  }}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <div
