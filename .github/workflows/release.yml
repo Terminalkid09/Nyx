@@ -126,13 +126,18 @@ jobs:
         # (and latest.yml's sha512 then pointed at a stale asset).
         run: npm run dist -- ${{ matrix.target }} --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # NOTE: do NOT pass CSC_LINK/APPLE_* secrets here. When unset they
           # arrive as EMPTY STRINGS, and electron-builder then treats CSC_LINK
           # as a certificate *path*, resolving it against the project dir →
           # "⨯ .../desktop not a file" on macOS. With no signing env at all,
           # eb cleanly skips signing (macOS builds are unsigned — Gatekeeper
           # shows the standard warning on first launch).
+          # NOTE: no GH_TOKEN either — with a token AND a release tag on the
+          # current commit, electron-builder v26 publishes on its own even
+          # with --publish never (observed: a second "Nyx 1.0.0.exe" asset
+          # appeared next to the workflow-uploaded one). Without a token eb
+          # skips publishing gracefully; the upload step below is the only
+          # publisher.
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
