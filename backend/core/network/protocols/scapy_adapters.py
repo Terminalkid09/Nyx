@@ -61,11 +61,22 @@ class DNSDecoder(ProtocolDecoder):
             if len(payload) < 12:
                 return None
             dns = DNS(payload)
-            # scapy parses almost anything; require a plausible header and at
-            # least one question/answer (all-zero bytes otherwise "parses").
-            if dns.qr not in (0, 1) or dns.qdcount > 100 or dns.ancount > 1000:
+            # scapy parses almost anything (footgun): require a plausible DNS
+            # header. Real DNS has a valid QR bit, an opcode in 0-5, sane
+            # counts and AT LEAST one question or answer. Random non-DNS UDP
+            # payloads sniffed on arbitrary ports otherwise get decoded as
+            # bogus DNS with zero questions/answers and garbage opcode/rcode
+            # (e.g. a broadcast whose nscount/arcount happened to be nonzero
+            # let it past the old ``qdcount+ancount+nscount+arcount`` sum).
+            if dns.qr not in (0, 1):
                 return None
-            if dns.qdcount + dns.ancount + dns.nscount + dns.arcount == 0:
+            if dns.opcode > 5:  # valid opcodes: QUERY=0 .. DSO=5
+                return None
+            if dns.qdcount > 100 or dns.ancount > 1000:
+                return None
+            # An authoritative response may echo zero questions, but unless
+            # it carries at least one question OR answer it is not DNS.
+            if dns.qdcount + dns.ancount == 0:
                 return None
             return dns
         except Exception:
@@ -76,10 +87,21 @@ class DNSDecoder(ProtocolDecoder):
             for pkt in stream.packets:
                 yield pkt.payload, pkt.timestamp
         else:
+            # DNS-over-TCP: each message carries a 2-byte length prefix and a
+            # single message may span MULTIPLE TCP segments. Reassembling per
+            # frame (old behaviour) decoded only the first segment of a
+            # fragmented message. Rebuild the byte stream from all frames and
+            # yield only complete messages; a trailing partial message is
+            # re-yielded once its tail arrives (the engine dedups re-parses).
+            buf = b""
             for f in stream.frames:
-                if len(f.payload) >= 2:
-                    # DNS-over-TCP: 2-byte message length prefix.
-                    yield f.payload[2:], f.timestamp
+                buf += f.payload
+                while len(buf) >= 2:
+                    msg_len = int.from_bytes(buf[:2], "big")
+                    if len(buf) < 2 + msg_len:
+                        break
+                    yield buf[2:2 + msg_len], f.timestamp
+                    buf = buf[2 + msg_len:]
 
     def _first_dns(self, stream: TCPStream | UDPFlow):
         for payload, _ in self._iter_payloads(stream):
@@ -88,8 +110,22 @@ class DNSDecoder(ProtocolDecoder):
                 return dns
         return None
 
-    def decode(self, stream: TCPStream | UDPFlow) -> Iterator[ProtocolFrame]:
-        for payload, ts in self._iter_payloads(stream):
+    def decode(self, stream: TCPStream | UDPFlow, start: int = 0) -> Iterator[ProtocolFrame]:
+        """Decode DNS messages in the stream.
+
+        ``start`` is the ABSOLUTE number of flow packets already decoded
+        (stream.trimmed + local index). The engine checkpoints it so each new
+        packet only decodes the new payloads instead of re-parsing the whole
+        flow on every datagram (O(n²) without it). The TCP path re-builds the
+        byte stream and ignores ``start`` — DNS-over-TCP streams are rare and
+        short.
+        """
+        if isinstance(stream, UDPFlow):
+            local = max(0, start - stream.trimmed)
+            payloads = ((p.payload, p.timestamp) for p in stream.packets[local:])
+        else:
+            payloads = self._iter_payloads(stream)
+        for payload, ts in payloads:
             dns = self._parse(payload)
             if dns is None:
                 continue
@@ -155,9 +191,14 @@ class DHCPDecoder(ProtocolDecoder):
         except Exception:
             return None
 
-    def decode(self, stream: TCPStream | UDPFlow) -> Iterator[ProtocolFrame]:
+    def decode(self, stream: TCPStream | UDPFlow, start: int = 0) -> Iterator[ProtocolFrame]:
         from scapy.all import DHCP
-        for pkt in stream.packets:
+        if isinstance(stream, UDPFlow):
+            local = max(0, start - stream.trimmed)
+            packets = stream.packets[local:]
+        else:
+            packets = stream.packets
+        for pkt in packets:
             bootp = self._parse(pkt.payload)
             if bootp is None:
                 continue

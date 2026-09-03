@@ -37,29 +37,41 @@ class WindowsManipulatorBackend(PacketManipulatorBackend):
 
     def modify_in_place(self, pkt: RawPacket, edits: "PacketEdits") -> RawPacket:
         try:
-            from scapy.all import IP, TCP, UDP, Raw
-            scapy_pkt = IP(pkt.raw_bytes)
+            from scapy.all import Ether, IP, TCP, UDP, Raw
+            raw = pkt.raw_bytes
+            # Captured packets are L2 (Ethernet) frames — parsing the raw
+            # bytes as a bare IP() datagram (old code) either raised or
+            # misparsed the MAC header, so modification silently no-oped.
+            eth = Ether(raw)
+            ip = eth.getlayer(IP)
+            container = eth
+            if ip is None:
+                # Bare IP datagram (no L2 header) — injected/synthetic.
+                if not raw or raw[0] >> 4 != 4:
+                    return pkt
+                ip = IP(raw)
+                container = ip
 
-            if edits.payload_replace and Raw in scapy_pkt:
-                scapy_pkt[Raw].load = edits.payload_replace
+            if edits.payload_replace and Raw in ip:
+                ip[Raw].load = edits.payload_replace
 
-            if edits.tcp_seq_delta and TCP in scapy_pkt:
-                scapy_pkt[TCP].seq += edits.tcp_seq_delta
+            if edits.tcp_seq_delta and TCP in ip:
+                ip[TCP].seq += edits.tcp_seq_delta
 
-            if edits.tcp_ack_set and TCP in scapy_pkt:
-                scapy_pkt[TCP].ack = edits.tcp_ack_set
+            if edits.tcp_ack_set and TCP in ip:
+                ip[TCP].ack = edits.tcp_ack_set
 
             if edits.recalc_checksums:
-                if IP in scapy_pkt:
-                    del scapy_pkt[IP].chksum
-                if TCP in scapy_pkt:
-                    del scapy_pkt[TCP].chksum
-                if UDP in scapy_pkt:
-                    del scapy_pkt[UDP].chksum
+                if IP in ip:
+                    del ip[IP].chksum
+                if TCP in ip:
+                    del ip[TCP].chksum
+                if UDP in ip:
+                    del ip[UDP].chksum
 
             return RawPacket(
                 timestamp=pkt.timestamp,
-                raw_bytes=bytes(scapy_pkt),
+                raw_bytes=bytes(container),
                 interface=pkt.interface,
                 metadata=pkt.metadata
             )

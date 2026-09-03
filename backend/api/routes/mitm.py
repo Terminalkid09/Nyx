@@ -22,7 +22,14 @@ from core.proxy.engine import (
     dhcp_block_clear,
     quic_block_set_targets,
     quic_block_clear,
+    quic_block_set_mode,
+    quic_block_mode,
+    quic_block_status,
     quic_dropped_count,
+    udp_policy_add,
+    udp_policy_clear,
+    udp_policy_remove,
+    udp_policy_status,
     TRANSPARENT_PORT,
 )
 from modules.arp_spoof import ARPSpoofer, _get_local_ip, _get_mac, _get_hostname
@@ -107,6 +114,7 @@ async def shutdown_mitm():
     _dhcp_started_ts = None
     dhcp_block_clear()
     quic_block_clear()
+    udp_policy_clear()
     if _dns_spoofer:
         await _dns_spoofer.stop()
         _dns_spoofer = None
@@ -293,6 +301,10 @@ class MITMStartRequest(BaseModel):
     enable_wifi_ap: bool = False
     wifi_ap_ssid: str = "Nyx"
     wifi_ap_passphrase: str = "nyxmitm2026"
+    # QUIC handling for the targets: "drop" (default) kills their UDP/443 so
+    # browsers fall back to interceptable TCP/TLS; "allow" lets QUIC pass
+    # through untouched (visible only in the passive network layer).
+    quic_mode: str = "drop"
 
 
 class MITMStartResponse(BaseModel):
@@ -813,7 +825,7 @@ async def _mitm_start_locked(req: MITMStartRequest):
     spoof_desc: list[str] = []
     # QUIC/HTTP3 block: drop the targets' UDP/443 so QUIC-capable clients
     # fall back to interceptable TCP/TLS instead of bypassing the proxy.
-    quic_block_set_targets(set(req.target_ips))
+    quic_block_set_targets(set(req.target_ips), mode=req.quic_mode)
     if _dhcp_spoofer is not None:
         spoof_desc.append(f"DHCP spoofing (Nyx as gateway {local_ip}) <- {target_v4 or '(no IPv4 targets)'}")
         # Audit trail
@@ -893,6 +905,8 @@ async def mitm_stop():
         _dhcp_fallback_task = None
     _dhcp_started_ts = None
     dhcp_block_clear()
+    quic_block_clear()
+    udp_policy_clear()
 
     if _dns_spoofer:
         await _dns_spoofer.stop()
@@ -971,6 +985,62 @@ def _activity_for_targets(engine) -> list[dict]:
     # If every entry was filtered out, the phone is probably on a new DHCP IP
     # — surface that instead of showing an empty monitor.
     return filtered[:60]
+
+
+# ── QUIC + UDP policy control (the WinDivert layer) ──────────────────────────
+
+
+class QuicModeRequest(BaseModel):
+    mode: str  # "drop" (force TCP fallback) | "allow" (QUIC passes through)
+
+
+class UdpRuleRequest(BaseModel):
+    target: str
+    dst_port: int | None = None
+    action: str = "drop"  # "drop" | "pass"
+
+
+@router.get("/quic")
+async def get_quic_status():
+    """Current QUIC handling: mode, tracked targets, dropped-packet count."""
+    return quic_block_status()
+
+
+@router.post("/quic")
+async def set_quic_mode(req: QuicModeRequest):
+    try:
+        quic_block_set_mode(req.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return quic_block_status()
+
+
+@router.get("/udp")
+async def get_udp_policy():
+    """WinDivert UDP drop/pass rules for forwarded target traffic."""
+    return udp_policy_status()
+
+
+@router.delete("/udp/rules/{index}")
+async def remove_udp_rule(index: int):
+    if not udp_policy_remove(index):
+        raise HTTPException(status_code=404, detail=f"No UDP rule at index {index}")
+    return udp_policy_status()
+
+
+@router.post("/udp/rules")
+async def add_udp_rule(req: UdpRuleRequest):
+    try:
+        udp_policy_add(req.target, req.dst_port, req.action)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return udp_policy_status()
+
+
+@router.post("/udp/clear")
+async def clear_udp_policy():
+    udp_policy_clear()
+    return udp_policy_status()
 
 
 @router.get("/status")
@@ -1068,9 +1138,12 @@ async def mitm_status():
             if local_ip and local_ip != "127.0.0.1"
             else None
         ),
-        # QUIC/HTTP3 blocking: how many of the targets' UDP/443 packets were
-        # dropped to force fallback to interceptable TCP/TLS.
+        # QUIC/HTTP3 handling: mode (drop/allow) + how many of the targets'
+        # UDP/443 packets were dropped to force fallback to interceptable
+        # TCP/TLS, plus the WinDivert UDP drop/pass policy state.
         "quic_blocked_packets": quic_dropped_count(),
+        "quic_mode": quic_block_mode(),
+        "udp_policy": udp_policy_status(),
         # Live per-target activity (SNI + HTTP hosts, most recent first) —
         # works even when the target has NOT installed the Nyx CA.
         # Filtered to the *selected* targets: the tracker records every device

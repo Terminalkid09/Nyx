@@ -5,10 +5,15 @@ import {
   startMitm,
   stopMitm,
   setTlsMitm,
+  setQuicMode,
+  addUdpRule,
+  removeUdpRule,
+  clearUdpPolicy,
   scanNetwork,
   removeCaFromHost,
   MitmStatus,
   NetworkDevice,
+  UdpRule,
 } from '../../api/endpoints/mitm'
 import { useMitmStore } from '../../store/useMitmStore'
 import { useSessionStore } from '../../store/useSessionStore'
@@ -84,6 +89,15 @@ export function MitmPage() {
   const [status, setStatus] = useState<MitmStatus & { captured_flows?: number } | null>(null)
   const [timeNow, setTimeNow] = useState<number>(Date.now())
   const [tlsSaving, setTlsSaving] = useState(false)
+  const [quicSaving, setQuicSaving] = useState(false)
+  // UDP rules editor (drop/pass forwarded target UDP at the WinDivert layer).
+  const [udpRules, setUdpRules] = useState<UdpRule[]>([])
+  const [udpMatched, setUdpMatched] = useState(0)
+  const [udpDropped, setUdpDropped] = useState(0)
+  const [udpTarget, setUdpTarget] = useState('')
+  const [udpPort, setUdpPort] = useState('')
+  const [udpAction, setUdpAction] = useState<'drop' | 'pass'>('drop')
+  const [udpSaving, setUdpSaving] = useState(false)
 
   // CA removal from THIS PC (post-test cleanup)
   const [caRemoving, setCaRemoving] = useState(false)
@@ -144,6 +158,14 @@ export function MitmPage() {
     const id = setInterval(() => setTimeNow(Date.now()), 5000)
     return () => clearInterval(id)
   }, [])
+
+  // Sync the UDP rules editor with the status poll (3s) — rules + counters
+  // stay live without extra requests after every mutation.
+  useEffect(() => {
+    setUdpRules(status?.udp_policy?.rules ?? [])
+    setUdpMatched(status?.udp_policy?.matched ?? 0)
+    setUdpDropped(status?.udp_policy?.dropped ?? 0)
+  }, [status?.udp_policy])
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   const handleScan = async () => {
@@ -250,6 +272,73 @@ export function MitmPage() {
     }
   }
 
+  const handleSetQuic = async (mode: 'drop' | 'allow') => {
+    setQuicSaving(true)
+    setError(null)
+    try {
+      const res = await setQuicMode(mode)
+      setStatus((s) => s ? { ...s, quic_mode: res.mode } : null)
+      await fetchStatus()
+    } catch (e: any) {
+      setError(
+        e.response?.data?.detail || e.message || 'Failed to change QUIC handling'
+      )
+    } finally {
+      setQuicSaving(false)
+    }
+  }
+
+  const handleAddUdpRule = async () => {
+    const target = udpTarget.trim()
+    if (!target) {
+      setError('Enter a target IP for the UDP rule')
+      return
+    }
+    const port = udpPort.trim() ? Number(udpPort) : null
+    if (port !== null && (Number.isNaN(port) || port < 0 || port > 65535)) {
+      setError('UDP port must be 0-65535, or leave blank for all ports')
+      return
+    }
+    setUdpSaving(true)
+    setError(null)
+    try {
+      await addUdpRule({ target, dst_port: port, action: udpAction })
+      setUdpTarget('')
+      setUdpPort('')
+      await fetchStatus()
+    } catch (e: any) {
+      setError(e.response?.data?.detail || e.message || 'Failed to add UDP rule')
+    } finally {
+      setUdpSaving(false)
+    }
+  }
+
+  const handleRemoveUdpRule = async (index: number) => {
+    setUdpSaving(true)
+    setError(null)
+    try {
+      await removeUdpRule(index)
+      await fetchStatus()
+    } catch (e: any) {
+      setError(e.response?.data?.detail || e.message || 'Failed to remove UDP rule')
+    } finally {
+      setUdpSaving(false)
+    }
+  }
+
+  const handleClearUdpRules = async () => {
+    setUdpSaving(true)
+    setError(null)
+    try {
+      await clearUdpPolicy()
+      await fetchStatus()
+    } catch (e: any) {
+      setError(e.response?.data?.detail || e.message || 'Failed to clear UDP rules')
+    } finally {
+      setUdpSaving(false)
+    }
+  }
+
   const handleRemoveCa = async () => {
     setCaRemoving(true)
     setCaRemoveMsg(null)
@@ -268,6 +357,7 @@ export function MitmPage() {
   const targetIps = status?.target_ips ?? []
   const capturedFlows = status?.captured_flows ?? 0
   const tlsEnabled = status?.tls_mitm !== false
+  const quicBlockMode = status?.quic_mode ?? 'drop'
   const lastTrafficSeen = status?.last_traffic_seen
   const trafficLastTs = lastTrafficSeen ? new Date(lastTrafficSeen).getTime() : 0
   // "Idle" = redirect/transport is up but no flow has been captured in the
@@ -829,6 +919,122 @@ export function MitmPage() {
                   <p className="text-[10px] text-gray-500 mt-1">
                     Requires the Nyx CA on the target
                   </p>
+                </div>
+
+                {/* QUIC handling toggle — live, no proxy restart */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    Force HTTPS fallback (QUIC)
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleSetQuic('drop')}
+                      disabled={quicSaving}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        quicBlockMode === 'drop'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      ON
+                    </button>
+                    <button
+                      onClick={() => handleSetQuic('allow')}
+                      disabled={quicSaving}
+                      className={`flex-1 px-3 py-2 text-xs rounded font-medium transition-colors ${
+                        quicBlockMode === 'allow'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      OFF
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    ON drops the target's UDP/443 so browsers fall back to
+                    interceptable HTTPS; OFF lets QUIC pass through unread.
+                  </p>
+                </div>
+
+                {/* UDP rules editor — drop/pass forwarded target UDP */}
+                <div className="mt-4 pt-4 border-t border-gray-700">
+                  <label className="block text-xs text-gray-400 mb-1.5">
+                    UDP rules (drop / pass target UDP traffic)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={udpTarget}
+                      onChange={(e) => setUdpTarget(e.target.value)}
+                      placeholder="Target IP"
+                      className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    />
+                    <input
+                      type="text"
+                      value={udpPort}
+                      onChange={(e) => setUdpPort(e.target.value)}
+                      placeholder="Port"
+                      className="w-20 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    />
+                    <select
+                      value={udpAction}
+                      onChange={(e) => setUdpAction(e.target.value as 'drop' | 'pass')}
+                      className="bg-gray-800 border border-gray-700 rounded px-2 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    >
+                      <option value="drop">Drop</option>
+                      <option value="pass">Pass</option>
+                    </select>
+                    <button
+                      onClick={handleAddUdpRule}
+                      disabled={udpSaving}
+                      className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-gray-200 text-sm rounded-lg transition-colors"
+                    >
+                      + Add
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Drop silently kills matching UDP flows from the target;
+                    Pass explicitly allows them (blank port = all ports).
+                  </p>
+
+                  {udpRules.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {udpRules.map((r, i) => (
+                        <div
+                          key={`${r.target}-${r.dst_port ?? '*'}-${r.action}-${i}`}
+                          className="flex items-center justify-between px-2 py-1 rounded bg-gray-800/60 border border-gray-700/60"
+                        >
+                          <span className="font-mono text-xs text-gray-300">
+                            {r.target}:{r.dst_port ?? '*'}{' '}
+                            <span
+                              className={r.action === 'drop' ? 'text-red-400' : 'text-emerald-400'}
+                            >
+                              {r.action}
+                            </span>
+                          </span>
+                          <button
+                            onClick={() => handleRemoveUdpRule(i)}
+                            disabled={udpSaving}
+                            className="text-gray-500 hover:text-red-400 text-sm px-1 disabled:text-gray-700"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      ))}
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-[10px] text-gray-500">
+                          matched {udpMatched} &middot; dropped {udpDropped}
+                        </span>
+                        <button
+                          onClick={handleClearUdpRules}
+                          disabled={udpSaving}
+                          className="text-[10px] text-gray-500 hover:text-red-400 disabled:text-gray-700 transition-colors"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

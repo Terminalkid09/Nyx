@@ -53,6 +53,9 @@ class TCPStream:
     start_time: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     metadata: dict = field(default_factory=dict)
+    # Incrementally maintained as frames are appended (O(1) per frame) so
+    # stream listings never re-sum the whole frame list per request.
+    bytes_total: int = 0
 
 
 @dataclass
@@ -62,6 +65,11 @@ class UDPFlow:
     packets: list = field(default_factory=list)
     start_time: Optional[datetime] = None
     last_seen: Optional[datetime] = None
+    # Incrementally maintained as packets are appended.
+    bytes_total: int = 0
+    # Number of oldest packets the tracker has trimmed to cap memory; decode
+    # checkpoints must shift by this amount (see UDPFlowTracker.feed).
+    trimmed: int = 0
 
 
 class ProtocolDecoder(ABC):
@@ -85,8 +93,14 @@ class ProtocolDecoder(ABC):
         pass
 
     @abstractmethod
-    def decode(self, stream: TCPStream | UDPFlow) -> Iterator[ProtocolFrame]:
-        """Decode stream into protocol frames."""
+    def decode(self, stream: TCPStream | UDPFlow, start: int = 0) -> Iterator[ProtocolFrame]:
+        """Decode stream into protocol frames.
+
+        ``start`` = absolute count of flow packets already decoded (the
+        engine's per-stream checkpoint: stream.trimmed + local index).
+        Decoders that track position decode only NEW payloads from local
+        index ``start - stream.trimmed`` onward.
+        """
         pass
 
     # ── Optional packet-level decoding ────────────────────────────────────

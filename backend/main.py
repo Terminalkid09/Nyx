@@ -41,6 +41,12 @@ event_bus = EventBus()
 proxy_engine = ProxyEngine(event_bus, host=settings.PROXY_HOST, port=settings.PROXY_PORT, mode=settings.PROXY_MODE)
 ws_manager: WebSocketManager | None = None
 _shutdown_event = threading.Event()
+# Defined at the top of the module: the lifespan, request_shutdown and the
+# atexit/signal handlers all reference it, and module-level functions resolve
+# globals at CALL time — but keeping the definition above every consumer
+# removes any ordering doubt (a handler invoked while the module is still
+# importing would otherwise NameError).
+_shutdown_started = threading.Event()
 
 _ca_portal = None
 
@@ -206,18 +212,35 @@ async def lifespan(app: FastAPI):
             _network_writer = PCAPWriter(settings.NETWORK_PCAP_PATH)
             _network_writer.open()
             _network_engine.set_pcap_output(_network_writer)
+        # Subscribe the live feed / event-bus publisher BEFORE starting the
+        # capture: frames emitted before any subscriber is registered are
+        # silently dropped, so starting the engine first would lose the very
+        # first frames (and the WebSocket live feed would never see them).
+        _init_network_api(event_bus, _network_engine)
         try:
             await _network_engine.start()
             network_task = asyncio.create_task(_network_engine.run_async())
             app.state.network_engine = _network_engine
             logger.info("Network capture engine started on %s", settings.NETWORK_IFACE)
+
+            # Wire the stats aggregation task to the engine's live collector
+            from modules.network.tasks import StatsAggregationTask
+            _stats_task = StatsAggregationTask(
+                stats_collector=_network_engine.stats_collector,
+                output_dir="stats",
+            )
+            await _stats_task.start()
+            app.state.stats_task = _stats_task
         except Exception as _net_err:
             logger.warning("Network capture engine failed to start: %s", _net_err)
             app.state.network_engine = None
+            try:
+                await _shutdown_network_api()
+            except Exception:
+                pass
     else:
         app.state.network_engine = None
-    # Wire the event bus / live feed (no-op when no engine is configured).
-    _init_network_api(event_bus, getattr(app.state, "network_engine", None))
+        _init_network_api(event_bus, None)
 
     # ── Audit trail ───────────────────────────────────────────────────
     from core.audit import start_audit_trail, log_audit
@@ -257,6 +280,12 @@ async def lifespan(app: FastAPI):
             await network_task
         except asyncio.CancelledError:
             pass
+    # Stop the stats aggregation task
+    if hasattr(app.state, 'stats_task') and app.state.stats_task:
+        try:
+            await app.state.stats_task.stop()
+        except Exception:
+            pass
     try:
         await _shutdown_network_api()
     except Exception as _net_err:
@@ -292,7 +321,8 @@ app.state._start_time = _START_TIME
 #   1. POST /api/shutdown  → graceful path used by the Electron shell on quit
 #   2. signal handlers     → Ctrl+C / SIGTERM (console close)
 #   3. atexit              → normal interpreter exit
-_shutdown_started = threading.Event()
+# (_shutdown_started itself is defined at the top of the module, above every
+# consumer — see the note next to _shutdown_event.)
 
 
 def _emergency_cleanup() -> None:

@@ -30,7 +30,22 @@ export interface MitmStatus {
   proxy_port?: number | null
   tls_mitm?: boolean
   quic_blocked_packets?: number
+  // "drop" (force TCP fallback, default) | "allow" (QUIC passes through)
+  quic_mode?: 'drop' | 'allow'
+  udp_policy?: UdpPolicy
   activity?: Array<{ ip: string; host: string; count: number; last_seen: string }>
+}
+
+export interface UdpRule {
+  target: string
+  dst_port: number | null
+  action: 'drop' | 'pass'
+}
+
+export interface UdpPolicy {
+  rules: UdpRule[]
+  matched?: number
+  dropped?: number
 }
 
 export interface NetworkDevice {
@@ -74,6 +89,35 @@ export async function stopMitm(): Promise<{ status: string }> {
 
 export async function setTlsMitm(active: boolean): Promise<{ tls_mitm: boolean }> {
   const { data } = await apiClient.post('/api/mitm/tls', { active })
+  return data
+}
+
+export async function setQuicMode(mode: 'drop' | 'allow'): Promise<{ mode: 'drop' | 'allow' }> {
+  const { data } = await apiClient.post('/api/mitm/quic', { mode })
+  return data
+}
+
+export async function getUdpPolicy(): Promise<UdpPolicy> {
+  const { data } = await apiClient.get('/api/mitm/udp')
+  return data
+}
+
+export async function addUdpRule(rule: {
+  target: string
+  dst_port: number | null
+  action: 'drop' | 'pass'
+}): Promise<UdpPolicy> {
+  const { data } = await apiClient.post('/api/mitm/udp/rules', rule)
+  return data
+}
+
+export async function removeUdpRule(index: number): Promise<UdpPolicy> {
+  const { data } = await apiClient.delete(`/api/mitm/udp/rules/${index}`)
+  return data
+}
+
+export async function clearUdpPolicy(): Promise<UdpPolicy> {
+  const { data } = await apiClient.post('/api/mitm/udp/clear')
   return data
 }
 

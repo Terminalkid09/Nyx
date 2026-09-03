@@ -9,7 +9,7 @@ Provides cross-platform network utilities for:
 - Live statistics
 """
 
-from core.network.capture import PacketCapture, RawPacket, CaptureStats, PacketCaptureBackend
+from core.network.capture import PacketCapture, RawPacket, CaptureStats
 from core.network.manipulate import PacketManipulator, PacketEdits, PacketManipulatorBackend
 from core.network.reassemble import TCPReassembler, UDPFlowTracker, TCPStream, UDPFlow, TCPFrame
 from core.network.protocols import (
@@ -32,7 +32,6 @@ __all__ = [
     "PacketCapture",
     "RawPacket",
     "CaptureStats",
-    "PacketCaptureBackend",
     "PacketManipulator",
     "PacketEdits",
     "PacketManipulatorBackend",

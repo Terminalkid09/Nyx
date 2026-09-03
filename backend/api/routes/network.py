@@ -39,6 +39,15 @@ _network_engine = None
 _capture_task: Optional[asyncio.Task] = None
 _event_bus = None
 _stats_collector = StatsCollector()
+_stats_task = None
+_pcap_rotation_task = None
+_cleanup_task = None
+# Serialises start/stop: two concurrent POST /capture/start requests would
+# otherwise BOTH pass the ``if not _network_engine`` guard and create two
+# orphaned engines (the second overwrites the global, the first keeps
+# sniffing with no handle). Python 3.10+ locks are loop-agnostic, so a
+# module-level asyncio.Lock is safe.
+_capture_lock = asyncio.Lock()
 
 _TLS_PORTS = (443, 8443, 9443, 993, 995, 5223, 8883)
 _HTTP_PORTS = (80, 8080, 8000, 8888)
@@ -157,11 +166,20 @@ class NetworkStatus(BaseModel):
     udp_flows: int
     packets_buffered: int
     frames_buffered: int
+    interface_changes: int = 0  # watchdog rebinds this session (adaptive capture)
+    # Network-layer defenses/tooling status (absent-safe for older engines).
+    udp_modifier: Optional[dict] = None
+    icmp_detector: Optional[dict] = None
+    arp_detector: Optional[dict] = None
+    # Aggregated QUIC connection summaries (one row per DCID, not per datagram).
+    quic_connections: int = 0
 
 
 class CaptureStartRequest(BaseModel):
     interface: str
-    bpf_filter: str = "tcp or udp"
+    # Matches core.config's NETWORK_BPF_FILTER default: a narrower "tcp or
+    # udp" silently drops ARP/ICMP frames the UI advertises support for.
+    bpf_filter: str = "tcp or udp or arp or icmp"
     snaplen: int = 65535
     promisc: bool = True
     pcap_path: Optional[str] = None
@@ -234,8 +252,8 @@ async def get_status():
             udp_flows=0,
             packets_buffered=0,
             frames_buffered=0,
+            interface_changes=0,
         )
-
     tcp_count = len(_network_engine.tcp_reassembler.get_all_streams())
     udp_count = len(_network_engine.udp_tracker.get_all_flows())
     stats = _stats_collector.get_stats(tcp_count, udp_count)
@@ -250,75 +268,186 @@ async def get_status():
         udp_flows=udp_count,
         packets_buffered=len(_network_engine.recent_packets),
         frames_buffered=len(_network_engine.recent_frames),
+        interface_changes=getattr(_network_engine, "interface_changes", 0),
+        udp_modifier=(
+            _network_engine.udp_modifier.status()
+            if hasattr(_network_engine, "udp_modifier") else None
+        ),
+        icmp_detector=(
+            _network_engine.icmp_detector.status()
+            if hasattr(_network_engine, "icmp_detector") else None
+        ),
+        arp_detector=(
+            _network_engine.arp_detector.status()
+            if hasattr(_network_engine, "arp_detector") else None
+        ),
+        quic_connections=len(getattr(_network_engine, "quic_connections", {}) or {}),
     )
+
+
+@router.get("/quic")
+async def get_quic_connections():
+    """Aggregated QUIC connection summaries — one entry per connection ID."""
+    if not _network_engine:
+        return []
+    conns = getattr(_network_engine, "quic_connections", None) or {}
+    return sorted(
+        conns.values(),
+        key=lambda c: c.get("last_seen") or c.get("first_seen") or "",
+        reverse=True,
+    )
+
+
+@router.get("/interfaces")
+async def list_interfaces():
+    """Capturable interfaces for the UI dropdown.
+
+    Each entry: {name, is_up, is_loopback, ipv4, is_default} — is_default
+    marks the interface owning the default route (what "auto" would pick).
+    """
+    from core.network.capture import list_capture_interfaces
+    # Enumeration calls resolve_active_interface() (scapy routing resync +
+    # psutil polling) — seconds on Windows with VPN adapters. Never on the
+    # event loop, or it freezes every other request behind it.
+    return await asyncio.to_thread(list_capture_interfaces)
 
 
 @router.post("/capture/start", response_model=dict)
 async def start_capture(request: CaptureStartRequest):
     global _network_engine, _capture_task
 
-    if _network_engine:
-        raise HTTPException(status_code=409, detail="Capture already running")
+    async with _capture_lock:
+        if _network_engine:
+            raise HTTPException(status_code=409, detail="Capture already running")
 
-    from modules.network.engine import NetworkEngine
+        from modules.network.engine import NetworkEngine
 
-    engine = NetworkEngine(
-        interface=request.interface,
-        bpf_filter=request.bpf_filter,
-        snaplen=request.snaplen,
-        promisc=request.promisc,
-        event_bus=_event_bus,
-    )
+        engine = NetworkEngine(
+            interface=request.interface,
+            bpf_filter=request.bpf_filter,
+            snaplen=request.snaplen,
+            promisc=request.promisc,
+            event_bus=_event_bus,
+            stats_collector=_stats_collector,
+        )
 
-    if request.pcap_path:
-        writer = PCAPWriter(request.pcap_path)
-        writer.open()
-        engine.set_pcap_output(writer)
+        if request.pcap_path:
+            writer = PCAPWriter(request.pcap_path)
+            writer.open()
+            engine.set_pcap_output(writer)
 
-    _stats_collector.reset()
-    _network_engine = engine
-    engine.on_frame(_live_feed.push_frame)
+        _stats_collector.reset()
+        _network_engine = engine
+        engine.on_frame(_live_feed.push_frame)
+        # Idempotent: normally started at boot by init_network(); restarting
+        # here makes start_capture self-sufficient (e.g. after a failed boot
+        # start stopped the feed).
+        _live_feed.start()
 
-    try:
-        await engine.start()
-    except Exception as e:
-        _network_engine = None
-        raise HTTPException(status_code=500, detail=f"Capture start failed: {e}")
+        try:
+            await engine.start()
+        except Exception as e:
+            _network_engine = None
+            # Release the sniffer (if partially started) and the pcap file
+            # descriptor — a failed start must not leak either.
+            try:
+                await engine.stop()
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=f"Capture start failed: {e}")
 
-    _capture_task = asyncio.create_task(engine.run_async())
+        _capture_task = asyncio.create_task(engine.run_async())
 
-    return {
-        "status": "started",
-        "interface": request.interface,
-        "pcap_path": request.pcap_path,
-    }
+        # Wire the stats aggregation task to the engine's live collector
+        from modules.network.tasks import StatsAggregationTask
+        global _stats_task
+        _stats_task = StatsAggregationTask(
+            stats_collector=_stats_collector,
+            output_dir="stats",
+        )
+        await _stats_task.start()
+
+        # Wire the PCAP rotation task to receive every captured packet
+        from modules.network.tasks import PCAPRotationTask
+        global _pcap_rotation_task
+        _pcap_rotation_task = PCAPRotationTask(
+            base_path="captures/capture.pcap",
+            max_size_mb=100,
+            max_duration_seconds=3600,
+        )
+        await _pcap_rotation_task.start()
+        engine.on_packet(_pcap_rotation_task.write_packet)
+
+        # Wire the capture cleanup task (deletes old/oversized pcap files)
+        from modules.network.tasks import CaptureCleanupTask
+        global _cleanup_task
+        _cleanup_task = CaptureCleanupTask(
+            capture_dir="captures",
+            max_age_days=7,
+            max_size_mb=1024,
+            interval_hours=6,
+        )
+        await _cleanup_task.start()
+
+        return {
+            "status": "started",
+            "interface": request.interface,
+            "pcap_path": request.pcap_path,
+        }
 
 
 @router.post("/capture/stop", response_model=CaptureStopResponse)
 async def stop_capture():
     global _network_engine, _capture_task
 
-    if not _network_engine:
-        return CaptureStopResponse(packets_captured=0, pcap_path=None)
+    async with _capture_lock:
+        if not _network_engine:
+            return CaptureStopResponse(packets_captured=0, pcap_path=None)
 
-    pcap_path = _network_engine.pcap_path
-    packet_count = _stats_collector._stats.packets_total
+        pcap_path = _network_engine.pcap_path
+        packet_count = _stats_collector._stats.packets_total
 
-    await _network_engine.stop()
-    _network_engine = None
+        # Stop the stats aggregation task
+        global _stats_task, _pcap_rotation_task
+        if _stats_task is not None:
+            try:
+                await _stats_task.stop()
+            except Exception:
+                pass
+            _stats_task = None
 
-    if _capture_task:
-        _capture_task.cancel()
-        try:
-            await _capture_task
-        except asyncio.CancelledError:
-            pass
-        _capture_task = None
+        # Stop the PCAP rotation task
+        global _pcap_rotation_task, _cleanup_task
+        if _pcap_rotation_task is not None:
+            try:
+                await _pcap_rotation_task.stop()
+            except Exception:
+                pass
+            _pcap_rotation_task = None
 
-    return CaptureStopResponse(
-        packets_captured=packet_count,
-        pcap_path=pcap_path,
-    )
+        # Stop the capture cleanup task
+        if _cleanup_task is not None:
+            try:
+                await _cleanup_task.stop()
+            except Exception:
+                pass
+            _cleanup_task = None
+
+        await _network_engine.stop()
+        _network_engine = None
+
+        if _capture_task:
+            _capture_task.cancel()
+            try:
+                await _capture_task
+            except asyncio.CancelledError:
+                pass
+            _capture_task = None
+
+        return CaptureStopResponse(
+            packets_captured=packet_count,
+            pcap_path=pcap_path,
+        )
 
 
 @router.get("/packets")
@@ -326,6 +455,20 @@ async def get_packets(limit: int = 200):
     if not _network_engine:
         return []
     return _network_engine.get_packet_list(limit=limit)
+
+
+@router.get("/packets/{seq}")
+async def get_packet_detail(seq: int):
+    """Wireshark-style dissection of one buffered packet (layer tree + hexdump).
+
+    404 when there is no engine or the seq left the bounded packet buffer.
+    """
+    if not _network_engine:
+        raise HTTPException(status_code=404, detail="No capture running")
+    detail = _network_engine.get_packet_detail(seq)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Packet {seq} not in buffer")
+    return detail
 
 
 @router.get("/frames")
@@ -350,7 +493,9 @@ async def get_streams():
             frame_count=len(stream.frames),
             start_time=stream.start_time or datetime.now(),
             last_seen=stream.last_seen or datetime.now(),
-            bytes_total=sum(len(f.payload) for f in stream.frames),
+            # Maintained incrementally at capture time (O(1)/frame) — the old
+            # per-request sum() made /streams O(total frames) every 2s tick.
+            bytes_total=getattr(stream, "bytes_total", 0),
             sni=stream.metadata.get("sni"),
             link=_proxy_link(ft),
         ))
@@ -364,7 +509,7 @@ async def get_streams():
             frame_count=len(flow.packets),
             start_time=flow.start_time or datetime.now(),
             last_seen=flow.last_seen or datetime.now(),
-            bytes_total=sum(p.length for p in flow.packets),
+            bytes_total=getattr(flow, "bytes_total", 0),
             link=_proxy_link(ft),
         ))
 

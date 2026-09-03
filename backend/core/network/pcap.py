@@ -82,6 +82,14 @@ class PCAPWriter:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+    def __del__(self):
+        # Safety net: write_packet() auto-opens the file, so a caller that
+        # forgets close() (or dies mid-flight) must not leak the descriptor.
+        try:
+            self.close()
+        except Exception:
+            pass
+
 
 class PCAPReader:
     """PCAP file reader."""
@@ -141,6 +149,12 @@ class PCAPReader:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class PCAPNGWriter:
@@ -215,3 +229,9 @@ class PCAPNGWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

@@ -56,15 +56,19 @@ def extract_sni_from_payload(client_hello: bytes) -> Optional[str]:
                 sni_list_len = int.from_bytes(client_hello[offset:offset + 2], "big")
                 offset += 2
                 while offset + 3 <= len(client_hello):
+                    # Each server-name entry is (type:1, length:2, value:len).
+                    # The old walk skipped only 1 byte for non-host_name
+                    # entries — landing in the MIDDLE of the entry's value and
+                    # reading garbage as the next type. Always advance past
+                    # the full (type + length + value).
                     sni_type = client_hello[offset]
+                    sni_len = int.from_bytes(client_hello[offset + 1:offset + 3], "big")
+                    if offset + 3 + sni_len > len(client_hello):
+                        return None
+                    value = client_hello[offset + 3:offset + 3 + sni_len]
+                    offset += 3 + sni_len
                     if sni_type == 0:  # host_name
-                        sni_len = int.from_bytes(client_hello[offset + 1:offset + 3], "big")
-                        offset += 3
-                        if offset + sni_len <= len(client_hello):
-                            return client_hello[offset:offset + sni_len].decode(
-                                "utf-8", errors="replace"
-                            )
-                    offset += 1
+                        return value.decode("utf-8", errors="replace")
                 break
             offset += ext_len
     except Exception as e:

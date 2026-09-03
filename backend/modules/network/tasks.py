@@ -117,6 +117,11 @@ class StatsAggregationTask:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Write final stats on stop so short captures aren't lost
+        try:
+            await self._write_stats()
+        except Exception:
+            pass
 
     async def _aggregation_loop(self):
         while self._running:
@@ -127,7 +132,9 @@ class StatsAggregationTask:
             await asyncio.sleep(self.interval)
 
     async def _write_stats(self):
-        stats = self.stats_collector.get_stats()
+        # Explicit stream counts: the task has no engine reference, so it
+        # aggregates transport-agnostic counters with zero live flows.
+        stats = self.stats_collector.get_stats(tcp_streams=0, udp_flows=0)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filepath = self.output_dir / f"stats_{timestamp}.json"
 
@@ -202,6 +209,11 @@ class PCAPRotationTask:
 
         if self._current_writer._packet_count > 0:
             try:
+                # Flush to ensure stat().st_size reflects actual written bytes
+                # (PCAPWriter buffers writes — without this the size check always sees 0).
+                if self._current_writer._fh:
+                    self._current_writer._fh.flush()
+
                 current_size = self._current_writer.path.stat().st_size
                 if current_size >= self.max_size:
                     self._rotate()

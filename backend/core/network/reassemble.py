@@ -113,15 +113,32 @@ class TCPReassembler:
                 stream = TCPStream(five_tuple=five_tuple)
                 stream.start_time = pkt.timestamp
                 self._streams[five_tuple] = stream
-                self._client_ports.add(tcp.sport)
 
-            is_client = tcp.sport in self._client_ports
-
-            if stream.client_isn is None and (tcp.flags & 0x02):
-                if is_client:
-                    stream.client_isn = tcp.seq
+            # Direction is decided by the TCP handshake, not by "first packet
+            # seen": a stream observed starting with the server's SYN-ACK must
+            # not mark the server's port as a client port. When NO handshake
+            # byte is observable at all (capture joined mid-stream), fall back
+            # to the old heuristic — the first observed side is the client.
+            if tcp.flags & 0x02:  # SYN (with or without ACK)
+                if tcp.flags & 0x10:
+                    # SYN-ACK → the responding side (server).
+                    is_client = False
+                    if stream.server_isn is None:
+                        stream.server_isn = tcp.seq
                 else:
-                    stream.server_isn = tcp.seq
+                    # Plain SYN → the initiator (client).
+                    is_client = True
+                    self._client_ports.add(tcp.sport)
+                    if stream.client_isn is None:
+                        stream.client_isn = tcp.seq
+            elif (stream.client_isn is None and stream.server_isn is None
+                  and not self._client_ports):
+                # No handshake observed and nothing known about the stream yet:
+                # assume the first side to send is the client.
+                is_client = True
+                self._client_ports.add(tcp.sport)
+            else:
+                is_client = tcp.sport in self._client_ports
 
             # Window scale is NOT encoded in the TCP window field — it is a
             # TCP option (kind 3, WScale) negotiated in the SYN/SYN-ACK
@@ -277,6 +294,7 @@ class TCPReassembler:
             timestamp=segment.timestamp,
             is_client=is_client,
         ))
+        stream.bytes_total += len(segment.data)
 
     def _insert_before_direction(self, stream: TCPStream, segment: TCPSegment, is_client: bool):
         frame = TCPFrame(
@@ -290,8 +308,10 @@ class TCPReassembler:
         for idx, f in enumerate(stream.frames):
             if f.is_client == is_client:
                 stream.frames.insert(idx, frame)
+                stream.bytes_total += len(segment.data)
                 return
         stream.frames.append(frame)
+        stream.bytes_total += len(segment.data)
 
     def _flush_out_of_order(self, stream: TCPStream, is_client: bool):
         key = (stream.five_tuple, is_client)
@@ -333,8 +353,9 @@ class TCPReassembler:
 class UDPFlowTracker:
     """UDP flow tracker with IP fragmentation reassembly."""
 
-    def __init__(self, timeout: float = 60.0):
+    def __init__(self, timeout: float = 60.0, max_packets_per_flow: int = 500):
         self.timeout = timedelta(seconds=timeout)
+        self.max_packets_per_flow = max_packets_per_flow
         self._flows: dict[FiveTuple, UDPFlow] = {}
         self._fragments: dict[tuple, dict] = defaultdict(dict)
 
@@ -372,7 +393,16 @@ class UDPFlowTracker:
                 timestamp=pkt.timestamp,
                 length=len(payload)
             ))
+            flow.bytes_total += len(payload)
             flow.last_seen = pkt.timestamp
+
+            # Cap per-flow memory: DNS resolvers etc. can accumulate thousands
+            # of tiny datagrams. The most recent packets are always kept; the
+            # trimmed prefix count shifts decode checkpoints (flow.trimmed).
+            if len(flow.packets) > self.max_packets_per_flow:
+                drop = len(flow.packets) - self.max_packets_per_flow
+                del flow.packets[:drop]
+                flow.trimmed += drop
 
             self._cleanup_old_flows(pkt.timestamp)
             return flow
