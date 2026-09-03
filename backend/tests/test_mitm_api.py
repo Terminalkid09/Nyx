@@ -104,6 +104,23 @@ class TestMITMStopAPI:
 class TestMITMScanNetworkAPI:
     """GET /api/mitm/scan-network"""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_network(self, monkeypatch):
+        """The scan endpoint ARPs every host of a /24 (~250 probes + reverse
+        DNS). Unmocked, these tests would hit the real LAN — slow (~30s each)
+        and flaky; worse, after other tests have churned the default
+        ThreadPoolExecutor the probes can starve and hang the whole suite.
+        Stub the network layer out: the HTTP plumbing is what is under test."""
+        import api.routes.mitm as mitm_mod
+        monkeypatch.setattr(mitm_mod, "_get_local_ip", lambda *a, **k: "192.168.1.155")
+        monkeypatch.setattr(mitm_mod, "_get_mac", lambda ip, timeout=1.5: "aa:bb:cc:dd:ee:01")
+        monkeypatch.setattr(mitm_mod, "_get_hostname", lambda ip: "host-1.local")
+
+        async def _vendor(mac, hostname=None):
+            return "TestVendor"
+
+        monkeypatch.setattr(mitm_mod, "_lookup_vendor", _vendor)
+
     def test_scan_network_returns_200(self, client, auth_headers):
         """Scan network endpoint returns 200."""
         resp = client.get("/api/mitm/scan-network", headers=auth_headers)
@@ -114,6 +131,8 @@ class TestMITMScanNetworkAPI:
         resp = client.get("/api/mitm/scan-network", headers=auth_headers)
         data = resp.json()
         assert isinstance(data, list)
+        assert len(data) > 0
+        assert data[0]["mac"] == "aa:bb:cc:dd:ee:01"
 
 
 class TestMITMTLSAPI:
