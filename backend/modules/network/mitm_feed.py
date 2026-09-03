@@ -133,6 +133,11 @@ async def stop_feed() -> None:
         logger.info("MITM packet feed stopped")
 
 
+def feed_engine():
+    """The live feed engine, or None (for the packet-detail endpoint)."""
+    return _feed_engine
+
+
 def feed_status() -> dict:
     """Compact status for the MITM /status payload (absent-safe fields)."""
     engine = _feed_engine

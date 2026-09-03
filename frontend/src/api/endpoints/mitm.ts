@@ -161,6 +161,23 @@ export async function getMitmPackets(limit = 120): Promise<MitmPacket[]> {
   return Array.isArray(data) ? data : []
 }
 
+/** Wireshark-style dissection of one feed packet (same shape as the
+ *  Network tab's GET /api/network/packets/{seq}). */
+export interface MitmPacketDetail {
+  seq: number
+  timestamp: string
+  length: number
+  sniffed_on: string
+  proto: string
+  layers: Array<{ name: string; fields: Record<string, string | { repr: string; raw: number }> }>
+  hexdump: string
+}
+
+export async function getMitmPacketDetail(seq: number): Promise<MitmPacketDetail> {
+  const { data } = await apiClient.get(`/api/mitm/packets/${seq}`)
+  return data
+}
+
 export async function removeCaFromHost(): Promise<{ status: string; message: string }> {
   const { data } = await apiClient.post('/api/ca/remove')
   return data

@@ -1214,6 +1214,30 @@ async def mitm_packets(limit: int = 120):
         return []
 
 
+@router.get("/packets/{seq}")
+async def mitm_packet_detail(seq: int):
+    """Wireshark-style dissection of one feed packet (layer tree + hexdump).
+
+    Same payload shape as GET /api/network/packets/{seq} — the UI renders the
+    identical modal. 404 when the feed is off or the seq left the bounded
+    buffer (400 packets).
+    """
+    try:
+        from modules.network.mitm_feed import feed_engine
+
+        engine = feed_engine()
+        if engine is None:
+            raise HTTPException(status_code=404, detail="Packet feed not running")
+        detail = engine.get_packet_detail(seq)
+        if detail is None:
+            raise HTTPException(status_code=404, detail=f"Packet {seq} not in buffer")
+        return detail
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="Packet feed not running")
+
+
 @router.post("/tls")
 async def mitm_set_tls(req: TLSSetting):
     """Enable/disable HTTPS decryption live (no proxy restart needed)."""

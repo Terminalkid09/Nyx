@@ -10,9 +10,6 @@ import pytest
 
 from modules.network import mitm_feed
 
-# pytest-asyncio runs in strict mode — async tests must be marked explicitly.
-pytestmark = pytest.mark.asyncio
-
 
 class _FakeEngine:
     """Minimal NetworkEngine stand-in: no sockets, instant lifecycle."""
@@ -35,6 +32,10 @@ class _FakeEngine:
 
     async def run_async(self):
         return
+
+    def get_packet_detail(self, seq):
+        """Mirror the real engine's detail contract (None = not in buffer)."""
+        return None
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +79,7 @@ class TestBuildTargetBpf:
 
 
 class TestFeedLifecycle:
+    @pytest.mark.asyncio
     async def test_start_runs_engine_and_records_targets(self, fake_engine):
         await mitm_feed.start_feed({"192.168.1.6", "192.168.1.60"}, gateway_ip="192.168.1.1")
         assert mitm_feed._feed_engine is not None
@@ -89,11 +91,13 @@ class TestFeedLifecycle:
         assert "192.168.1.1" not in " ".join(status["targets"])
         await mitm_feed.stop_feed()
 
+    @pytest.mark.asyncio
     async def test_start_with_no_targets_sets_error_not_engine(self, fake_engine):
         await mitm_feed.start_feed(set())
         assert mitm_feed._feed_engine is None
         assert mitm_feed.feed_status()["error"]
 
+    @pytest.mark.asyncio
     async def test_start_failure_degrades_to_error(self, monkeypatch):
         class _Boom:
             def __init__(self, *a, **k):
@@ -105,6 +109,7 @@ class TestFeedLifecycle:
         assert status["running"] is False
         assert "Npcap missing" in (status["error"] or "")
 
+    @pytest.mark.asyncio
     async def test_stop_clears_state(self, fake_engine):
         await mitm_feed.start_feed({"10.0.0.5"})
         engine = mitm_feed._feed_engine
@@ -114,6 +119,7 @@ class TestFeedLifecycle:
         assert mitm_feed.feed_status()["running"] is False
         assert engine.stopped
 
+    @pytest.mark.asyncio
     async def test_double_start_keeps_single_engine(self, fake_engine):
         await mitm_feed.start_feed({"10.0.0.5"})
         first = mitm_feed._feed_engine
@@ -124,6 +130,7 @@ class TestFeedLifecycle:
 
 
 class TestRecentPackets:
+    @pytest.mark.asyncio
     async def test_packets_from_engine(self, fake_engine):
         await mitm_feed.start_feed({"10.0.0.5"})
         pkts = mitm_feed.recent_packets()
@@ -137,3 +144,24 @@ class TestRecentPackets:
         # limit <= 0 and > 400 must not explode (min/max clamp)
         assert isinstance(mitm_feed.recent_packets(0), list)
         assert isinstance(mitm_feed.recent_packets(10**9), list)
+
+
+class TestPacketDetail:
+    """The feed engine handle used by GET /api/mitm/packets/{seq}."""
+
+    def test_feed_engine_none_when_off(self):
+        assert mitm_feed.feed_engine() is None
+
+    @pytest.mark.asyncio
+    async def test_feed_engine_returns_live_engine(self, fake_engine):
+        await mitm_feed.start_feed({"10.0.0.5"})
+        try:
+            engine = mitm_feed.feed_engine()
+            assert engine is mitm_feed._feed_engine
+            # The detail contract the endpoint relies on: the engine exposes
+            # get_packet_detail(seq) -> dict | None (same as the Network tab).
+            assert hasattr(engine, "get_packet_detail")
+            assert engine.get_packet_detail(999) is None
+        finally:
+            await mitm_feed.stop_feed()
+
