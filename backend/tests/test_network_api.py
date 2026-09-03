@@ -11,6 +11,88 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+class _StubComponent:
+    """Stands in for UDPModifier / ICMPTunnelDetector / ARPSpoofDetector —
+    the status route calls .status() on whatever is attached."""
+
+    def status(self):
+        return {"enabled": False}
+
+
+class _StubNetworkEngine:
+    """Engine stand-in for endpoint tests: never opens a real sniffer.
+
+    The real NetworkEngine requires a capturable interface (Npcap/libpcap
+    + the requested NIC present). CI runners have neither — the previous
+    unmocked version passed locally on Windows and failed on ubuntu with
+    a 500 from engine.start(). The HTTP plumbing is what is under test.
+    """
+
+    instances: list = []
+
+    def __init__(self, *args, **kwargs):
+        self.requested_interface = kwargs.get("interface", "")
+        self.interface = self.requested_interface
+        self.bpf_filter = kwargs.get("bpf_filter", "")
+        self.pcap_path = None
+        self.recent_packets = []
+        self.recent_frames = []
+        self.recent_raw_packets = []
+        self.tcp_reassembler = type("R", (), {
+            "get_all_streams": staticmethod(lambda: [])})()
+        self.udp_tracker = type("U", (), {
+            "get_all_flows": staticmethod(lambda: [])})()
+        self.udp_modifier = _StubComponent()
+        self.icmp_detector = _StubComponent()
+        self.arp_detector = _StubComponent()
+        self.quic_connections = {}
+        self.interface_changes = 0
+        self.started = False
+        self.stopped = False
+        _StubNetworkEngine.instances.append(self)
+
+    def on_frame(self, cb):
+        self._frame_cb = cb
+
+    def on_packet(self, cb):
+        self._packet_cb = cb
+
+    def set_pcap_output(self, writer):
+        self.pcap_path = getattr(writer, "path", None)
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+    async def run_async(self):
+        return
+
+    def get_packet_list(self, limit=200):
+        return []
+
+    def get_frame_list(self, limit=200):
+        return []
+
+
+@pytest.fixture
+def stub_engine(monkeypatch):
+    """Patch NetworkEngine at its source module (the route imports it lazily
+    inside the handler, so the source module namespace is what gets read) +
+    reset the routes-module globals so every test starts stopped and clean."""
+    import modules.network.engine as engine_module
+    import api.routes.network as net_module
+
+    monkeypatch.setattr(engine_module, "NetworkEngine", _StubNetworkEngine)
+    monkeypatch.setattr(net_module, "_network_engine", None)
+    monkeypatch.setattr(net_module, "_capture_task", None)
+    _StubNetworkEngine.instances = []
+    yield _StubNetworkEngine
+    # Ensure a stopped state for whatever runs next (order-independence).
+    net_module._network_engine = None
+
+
 @pytest.fixture
 def client():
     """Create a TestClient for the FastAPI app."""
@@ -62,7 +144,7 @@ class TestNetworkStatusAPI:
 class TestCaptureStartAPI:
     """POST /api/network/capture/start"""
 
-    def test_start_capture_returns_200(self, client, auth_headers):
+    def test_start_capture_returns_200(self, client, auth_headers, stub_engine):
         """Start capture returns 200 with status=started."""
         resp = client.post("/api/network/capture/start",
                           json={"interface": "Wi-Fi"}, headers=auth_headers)
@@ -76,7 +158,7 @@ class TestCaptureStartAPI:
         resp = client.post("/api/network/capture/start", json={}, headers=auth_headers)
         assert resp.status_code == 422
 
-    def test_start_capture_twice_returns_409(self, client, auth_headers):
+    def test_start_capture_twice_returns_409(self, client, auth_headers, stub_engine):
         """Starting capture twice returns 409 Conflict."""
         client.post("/api/network/capture/start",
                    json={"interface": "Wi-Fi"}, headers=auth_headers)
@@ -88,7 +170,7 @@ class TestCaptureStartAPI:
         # Cleanup
         client.post("/api/network/capture/stop", headers=auth_headers)
 
-    def test_start_then_status_shows_running(self, client, auth_headers):
+    def test_start_then_status_shows_running(self, client, auth_headers, stub_engine):
         """After starting, status shows running=True."""
         client.post("/api/network/capture/start",
                    json={"interface": "Wi-Fi"}, headers=auth_headers)
@@ -172,7 +254,7 @@ class TestExportAPI:
         resp = client.get("/api/network/export", headers=auth_headers)
         assert resp.status_code == 404
 
-    def test_export_with_capture_returns_pcap(self, client, auth_headers):
+    def test_export_with_capture_returns_pcap(self, client, auth_headers, stub_engine):
         """Export returns valid pcap file after capture."""
         client.post("/api/network/capture/start",
                    json={"interface": "Wi-Fi"}, headers=auth_headers)
