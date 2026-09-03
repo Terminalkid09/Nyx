@@ -1,0 +1,9 @@
+# Build artifacts
+dist/
+dist_new/
+dist_old/
+dist_old_bak/
+build/
+
+# Backend (downloaded/built separately)
+backend/

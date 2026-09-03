@@ -1,6 +1,9 @@
-from fastapi import APIRouter
+import logging
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from core.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -27,11 +30,22 @@ async def get_proxy_settings():
 
 
 @router.put("/proxy", response_model=ProxySettings)
-async def update_proxy_settings(settings_data: ProxySettings):
+async def update_proxy_settings(settings_data: ProxySettings, request: Request):
     global _proxy_host, _proxy_port, _proxy_mode
     _proxy_host = settings_data.host
     _proxy_port = settings_data.port
     _proxy_mode = settings_data.mode
+    engine = getattr(request.app.state, "proxy_engine", None)
+    if engine:
+        try:
+            engine.stop()
+            engine.host = _proxy_host
+            engine.port = _proxy_port
+            engine.mode = _proxy_mode
+            engine.start(engine.fastapi_loop)
+        except Exception as e:
+            logger.error("Failed to restart proxy with new settings: %s", e)
+            raise HTTPException(status_code=500, detail=f"Failed to restart proxy: {e}")
     return ProxySettings(host=_proxy_host, port=_proxy_port, mode=_proxy_mode)
 
 

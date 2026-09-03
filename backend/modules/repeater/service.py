@@ -6,9 +6,14 @@ import re
 import httpx
 from typing import Optional
 
+import logging
+
+from core.utils.text import safe_decode
 from core.storage.database import AsyncSessionLocal
 from core.storage.models import RepeaterTab as RepeaterTabModel, RepeaterHistory as RepeaterHistoryModel
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 
 class RequestEntry:
@@ -35,13 +40,12 @@ class RepeaterTab:
 class RepeaterService:
     def __init__(self):
         self._tabs: dict[str, RepeaterTab] = {}
+
+    async def startup(self):
         try:
-            asyncio.run(self._load_tabs())
-        except RuntimeError:
-            try:
-                asyncio.get_running_loop().create_task(self._load_tabs())
-            except RuntimeError:
-                pass
+            await self._load_tabs()
+        except Exception as e:
+            logger.warning("Repeater: could not load tabs from DB: %s", e)
 
     async def _load_tabs(self):
         try:
@@ -68,16 +72,16 @@ class RepeaterService:
                         )
                         tab.request_history.append(entry)
                     self._tabs[db_tab.id] = tab
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Repeater: failed to load tabs: %s", e)
 
     async def _save_tab(self, tab_id: str, name: str):
         try:
             async with AsyncSessionLocal() as session:
                 session.add(RepeaterTabModel(id=tab_id, name=name))
                 await session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Repeater: failed to save tab %s: %s", tab_id, e)
 
     async def _delete_tab(self, tab_id: str):
         try:
@@ -88,8 +92,8 @@ class RepeaterService:
                 if db_tab:
                     await session.delete(db_tab)
                     await session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Repeater: failed to delete tab %s: %s", tab_id, e)
 
     async def _save_history(self, tab_id: str, entry: RequestEntry):
         try:
@@ -107,8 +111,8 @@ class RepeaterService:
                     timestamp=entry.timestamp,
                 ))
                 await session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Repeater: failed to save history for tab %s: %s", tab_id, e)
 
     def create_tab(self, name: str = "Untitled", request_data: Optional[dict] = None) -> RepeaterTab:
         tab_id = str(uuid.uuid4())[:8]
@@ -125,7 +129,7 @@ class RepeaterService:
         try:
             asyncio.get_running_loop().create_task(self._save_tab(tab_id, name))
         except RuntimeError:
-            pass
+            logger.debug("Repeater: no event loop for _save_tab (tab %s)", tab_id)
         return tab
 
     def close_tab(self, tab_id: str) -> bool:
@@ -134,7 +138,7 @@ class RepeaterService:
             try:
                 asyncio.get_running_loop().create_task(self._delete_tab(tab_id))
             except RuntimeError:
-                pass
+                logger.debug("Repeater: no event loop for _delete_tab (tab %s)", tab_id)
             return True
         return False
 
@@ -162,7 +166,12 @@ class RepeaterService:
                 resp = await client.request(method=method, url=url, headers=headers, content=body)
                 entry.response_status = resp.status_code
                 entry.response_headers = dict(resp.headers)
-                entry.response_body = resp.text
+                # Decode with safe_decode: text bodies stay readable, binary
+                # bodies (video/images/files) become hex instead of garbage —
+                # resp.text rendered binary payloads as UTF-8 replacement
+                # chars ("caratteri stranissimi" in the Repeater UI).
+                ct = resp.headers.get("content-type", "")
+                entry.response_body = safe_decode(resp.content, ct)
                 entry.time_ms = int(resp.elapsed.total_seconds() * 1000)
             except httpx.TimeoutException:
                 entry.response_status = 504

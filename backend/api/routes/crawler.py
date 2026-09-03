@@ -64,6 +64,15 @@ def _run_crawl_in_background(job_id: str, body: CrawlStartRequest):
         try:
             crawler = CrawlerService(event_bus)
             _crawl_jobs[job_id]["crawler_service"] = crawler
+
+            # Subscribe to real-time progress updates
+            async def on_progress(evt: dict):
+                if evt.get("job_id") == job_id:
+                    _crawl_jobs[job_id]["progress"] = evt.get("pages_visited", 0)
+                    _crawl_jobs[job_id]["discovered_urls"] = evt.get("discovered_urls", [])
+                    _crawl_jobs[job_id]["discovered_forms"] = evt.get("forms_found", [])
+            event_bus.subscribe("crawl.progress", on_progress)
+
             result = await crawler.crawl(
                 start_url=body.start_url,
                 max_depth=body.max_depth,
@@ -91,10 +100,10 @@ def _run_crawl_in_background(job_id: str, body: CrawlStartRequest):
                 "id": job_id,
                 "start_url": body.start_url,
                 "status": "failed",
-                "progress": 0,
+                "progress": _crawl_jobs[job_id].get("progress", 0),
                 "max_pages": body.max_pages,
-                "discovered_urls": [],
-                "discovered_forms": [],
+                "discovered_urls": _crawl_jobs[job_id].get("discovered_urls", []),
+                "discovered_forms": _crawl_jobs[job_id].get("discovered_forms", []),
                 "created_at": _crawl_jobs[job_id].get("created_at", datetime.now(timezone.utc).isoformat()),
                 "error": str(e),
             }

@@ -297,7 +297,7 @@ async def toggle_schedule(schedule_id: str, request: Request):
 # ─── Reports ────────────────────────────────────────────────────────────────
 
 class ReportRequest(BaseModel):
-    session_id: str | None = None
+    session_id: uuid.UUID
     scan_name: str = "Nyx Scan Report"
 
 

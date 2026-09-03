@@ -33,22 +33,31 @@ class ParamDiscoveryService:
         base_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
         
         async def check_param(param: str) -> dict | None:
-            params = {param: "1"}
+            # We inject a unique, highly identifiable payload to check for reflection
+            magic_payload = f"nyx_reflect_test_{uuid.uuid4().hex[:8]}"
+            params = {param: magic_payload}
             test_url = f"{base_url}?{urlencode(params)}"
             try:
                 async with httpx.AsyncClient(verify=False, timeout=10) as client:
-                    # Get baseline
+                    # Get baseline (without param)
                     base_resp = await client.get(base_url, follow_redirects=True)
                     # Get with param
                     test_resp = await client.get(test_url, follow_redirects=True)
                     
+                    # 1. Check for reflection (strongest signal for XSS / SSTI)
+                    if magic_payload in test_resp.text:
+                        return {"param": param, "reason": "reflected", "payload": magic_payload}
+                    
+                    # 2. Check for status code difference
                     if test_resp.status_code != base_resp.status_code:
                         return {"param": param, "reason": "status", "status": test_resp.status_code}
+                    
+                    # 3. Check for significant size difference
                     if len(test_resp.content) != len(base_resp.content) and abs(len(test_resp.content) - len(base_resp.content)) > 50:
                         return {"param": param, "reason": "size_diff", "size_diff": len(test_resp.content) - len(base_resp.content)}
-                    # Check content difference
+                    
+                    # 4. Check for arbitrary content difference
                     if test_resp.text != base_resp.text:
-                        # Find what changed
                         return {"param": param, "reason": "content_diff"}
             except Exception:
                 pass

@@ -7,23 +7,9 @@ from sqlalchemy import select
 from core.events.bus import EventBus
 from core.storage.database import AsyncSessionLocal
 from core.storage.models import MatchReplaceRule
+from core.utils.text import is_text_content
 
 logger = logging.getLogger(__name__)
-
-TEXT_CONTENT_TYPES = {
-    "text/", "application/json", "application/xml", "application/xhtml+xml",
-    "application/javascript", "application/x-javascript", "application/ecmascript",
-    "application/graphql", "application/ld+json", "application/soap+xml",
-}
-
-
-def _is_text_content(content_type: str | None) -> bool:
-    if not content_type:
-        return True
-    ct = content_type.lower().split(";")[0].strip()
-    if ct.startswith("text/"):
-        return True
-    return ct in TEXT_CONTENT_TYPES
 
 
 class MatchReplaceEngine:
@@ -110,7 +96,7 @@ class MatchReplaceEngine:
         if scope in ("request", "request_body"):
             if flow.request.content:
                 ct = flow.request.headers.get("content-type", "")
-                if not _is_text_content(ct):
+                if not is_text_content(ct):
                     return
                 try:
                     text = flow.request.content.decode("utf-8", errors="replace")
@@ -122,7 +108,7 @@ class MatchReplaceEngine:
         elif scope in ("response", "response_body"):
             if flow.response and flow.response.content:
                 ct = flow.response.headers.get("content-type", "")
-                if not _is_text_content(ct):
+                if not is_text_content(ct):
                     return
                 try:
                     text = flow.response.content.decode("utf-8", errors="replace")

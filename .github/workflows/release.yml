@@ -43,11 +43,26 @@ jobs:
         working-directory: .
         run: pyinstaller --noconfirm desktop/nyx-backend.spec
 
-      - name: Upload backend binary
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Go Collaborator
+        working-directory: collaborator
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            go build -ldflags="-s -w" -o ../dist/nyx-collaborator.exe .
+          else
+            go build -ldflags="-s -w" -o ../dist/nyx-collaborator .
+          fi
+        shell: bash
+
+      - name: Upload backend & collaborator binaries
         uses: actions/upload-artifact@v4
         with:
-          name: nyx-backend-${{ runner.os }}
-          path: dist/nyx-backend*
+          name: nyx-binaries-${{ runner.os }}
+          path: dist/nyx-*
           retention-days: 1
 
   build-desktop:
@@ -86,22 +101,22 @@ jobs:
       - name: Download backend binary
         uses: actions/download-artifact@v4
         with:
-          name: nyx-backend-${{ runner.os }}
+          name: nyx-binaries-${{ runner.os }}
           path: dist
 
       - name: Make backend binary executable (macOS/Linux)
         if: runner.os != 'Windows'
-        run: chmod +x dist/nyx-backend
+        run: chmod +x dist/nyx-backend* dist/nyx-collaborator*
 
       - name: Build frontend
         working-directory: frontend
         run: |
-          npm install
+          npm ci
           npm run build
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install
+        run: npm ci
 
       - name: Build installer
         working-directory: desktop

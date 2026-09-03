@@ -80,6 +80,7 @@ class CsrfPocService:
 
     def _generate_fetch_poc(self, method: str, url: str, body: str, form_data: dict | None = None) -> str:
         """Generate CSRF PoC using JavaScript fetch() for JSON APIs."""
+        escaped_body = body.replace('`', '\\`') if body else ''
         return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -96,7 +97,7 @@ class CsrfPocService:
                 method: '{method}',
                 credentials: 'include',
                 headers: {{ 'Content-Type': 'application/json' }},
-                body: `{body.replace('`', '\\`')}`
+                body: `{escaped_body}`
             }})
             .then(r => r.text())
             .then(t => document.getElementById('output').textContent = t)

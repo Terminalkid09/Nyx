@@ -105,7 +105,8 @@ class Finding(Base):
     evidence: Mapped[str | None] = mapped_column(Text)
     remediation: Mapped[str | None] = mapped_column(Text)
     cwe: Mapped[str | None] = mapped_column(String(32))
-    cvss_score: Mapped[float | None] = mapped_column()
+    cvss_score: Mapped[float | None] = mapped_column(nullable=True)
+    cvss_vector: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     session: Mapped["Session"] = relationship(back_populates="findings")
     request: Mapped["Request | None"] = relationship(back_populates="findings")

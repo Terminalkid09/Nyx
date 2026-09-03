@@ -21,6 +21,8 @@
   <img src="https://img.shields.io/badge/python-3.10-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10" />
   <img src="https://img.shields.io/badge/react-18-61dafb?style=flat-square&logo=react&logoColor=white" alt="React 18" />
   <img src="https://img.shields.io/badge/electron-43-47848f?style=flat-square&logo=electron&logoColor=white" alt="Electron 43" />
+  <img src="https://img.shields.io/badge/Go-1.22-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22" />
+  <img src="https://img.shields.io/badge/C++17-00599C?style=flat-square&logo=cplusplus&logoColor=white" alt="C++17" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License" />
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-brightgreen?style=flat-square" alt="Cross-platform" />
 </p>
@@ -31,37 +33,25 @@
 
 **Nyx** is an open-source, modular web security testing platform built for penetration testers and security researchers. It combines traffic interception, automated vulnerability scanning, intelligent fuzzing, auto-exploit generation with interactive PoCs, and professional report generation into a single, cohesive suite — available as a **desktop app** (no Docker or Python required), a **Docker deployment**, or a **source-based development setup**.
 
-### 🚀 Feature Comparison: Nyx vs Burp Suite Pro
+### Feature Overview
 
-| Feature | Nyx | Burp Suite Pro |
-|---------|-----|---------------|
-| **ARP Spoofing** (zero-config interception) | ✅ **Built-in** — intercept any device on the LAN | ❌ Manual proxy setup on each device |
-| **Transparent Proxy** | ✅ Native — no browser config | ❌ Forward proxy only |
-| **Interception Rules Engine** | ✅ Match by header/body/URL/regex, scope per request/response | ⚠️ Basic on/off toggle only |
-| **Match & Replace (auto-rewrite)** | ✅ Real-time regex rewriting in proxy | ❌ Requires extension |
-| **Passive Scanner Checks** | ✅ **210+** real-time vulnerability checks | ✅ ~200 |
-| **Custom Scanner Checks** | ✅ User-defined regex checks with inline test runner | ❌ Not available |
-| **Active Scanner Checks** | ✅ **110+** including SQLi, XSS, SSRF, SSTI, XXE, IDOR | ✅ More mature but proprietary |
-| **Auto-Exploit PoC Generator** | ✅ 21+ CWE types with interactive HTML | ❌ Not available |
-| **Automation Engine** | ✅ Scheduled scans, webhooks, auto-reports | ⚠️ Manual scan only |
-| **Fuzzer multi-mode** | ✅ Sniper, Pitchfork, Cluster Bomb, parameter discovery | ✅ Intruder |
-| **Repeater (request replay)** | ✅ Full header/body control, request history, tab management | ✅ More mature |
-| **Comparer** | ✅ Side-by-side diff with proxy integration | ✅ Side-by-side diff |
-| **Sequencer** | ✅ Token entropy analysis (chi-squared, compression) | ✅ Token analysis |
-| **Decoder** | ✅ 15 codecs: Base64, JWT, URL, hex, hashes, Gzip | ✅ 15+ codecs |
-| **Session Handling** | ✅ Macro-based with cookie jar | ✅ Session handling rules |
-| **Crawler** | ✅ Playwright headless JS-aware | ✅ (slower) |
-| **WebSocket Support** | ✅ Intercept, inspect, replay WebSocket frames | ❌ Not supported |
-| **MITM Network Attack** | ✅ ARP spoofing + DNS spoofing + captive portal | ❌ Not supported |
-| **Dashboard** | ✅ Real-time trends, findings, traffic stats | ⚠️ Basic dashboard |
-| **Price** | **💰 Free (MIT)** | 💸 **$449/year** |
-| **Test Coverage** | ✅ **455+ automated tests** (CI-verified) | ❌ Proprietary |
-| **Platforms** | 🖥️ Windows/macOS/Linux | 🖥️ Windows/macOS/Linux |
-| **Admin required** | ⚠️ ARP spoofing only | ❌ Never |
+| Area | Capabilities |
+|------|-------------|
+| **Traffic interception** | ARP spoofing (zero-config LAN MITM), transparent proxy, regular forward proxy, WebSocket capture |
+| **Network layer (passive)** | Wireshark-style LAN capture: live packet list with detail dissection, TCP/UDP stream reassembly, protocol decoders (TLS/HTTP/HTTP2/DNS/QUIC), PCAP/PCAPNG export, ARP-spoof & ICMP-tunnel detection |
+| **Vulnerability scanning** | 210+ passive checks, 110+ active probes, custom regex checks, content discovery, JS-aware crawler |
+| **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
+| **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
+| **OAST** | Self-hosted Collaborator server (Go) for blind XXE/SSRF/DNS exfiltration detection |
+| **Advanced MITM** | ARP/DHCP/NDP spoofing with auto-fallback, rogue-DHCP-first stealth mode with post-stop lease healing (targets recover in seconds), **reactive ARP** (sniff-and-reply, undetectable), **RA spoofing (IPv6)**, **WiFi AP mode** (rogue hotspot — the target connects to you, zero spoofing), network device discovery, always-on CA portal with QR install, QUIC/HTTP3 blocking, gRPC parsing (native C++ module) |
+| **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
+| **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
+| **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
+| **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
+| **Security Hardening** | SQLCipher AES-256 encryption at-rest, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail |
+| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 900+ tests, CI/CD pipeline, Electron code signing |
 
-> **The killer feature:** Nyx can intercept traffic from any device on the same WiFi network **with zero configuration** — one click. Burp requires you to manually set up a proxy on every browser or device.
-
-Nyx is designed to be a modern, extensible alternative to commercial tools like Burp Suite Professional, with 320+ security checks, context-aware auto-exploit payloads (21+ CWE types), a CyberChef-style Decoder pipeline, a full Macro Login editor with Regex extraction, and enterprise-grade automation included out of the box — all in version **1.0.0**.
+Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
 
 ---
 
@@ -75,24 +65,34 @@ Nyx is designed to be a modern, extensible alternative to commercial tools like 
 | **Repeater** | Manually craft and replay HTTP requests with full header control |
 | **Match & Replace** | Automated request/response rewriting rules (regex supported) |
 | **WebSocket Viewer** | Inspect and replay WebSocket frames |
+| **QUIC/HTTP3 Blocking** | Drops targets' UDP/443 so QUIC-capable clients fall back to interceptable TCP/TLS — no traffic escapes the proxy |
+| **Network (Packet Capture)** | Wireshark-style passive capture of the LAN: live packet list, TCP/UDP stream reassembly, protocol decoders (TLS/HTTP/HTTP2/DNS/QUIC), PCAP export — independent of the proxy |
+| **Activity Monitor** | Live per-target view of contacted domains (TLS SNI + HTTP Host) — full visibility of what each device is doing even without a trusted certificate |
+| **HAR Export** | One-click export of the captured session as HAR 1.2 (opens in Chrome DevTools, Firefox, Charles) |
 
 ### 🔍 Scanning & Discovery
 | Module | Description |
 |--------|-------------|
-| **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities |
-| **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more |
+| **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities + Wappalyzer-style tech fingerprinting + info disclosure (credit cards, SSN, API keys) |
+| **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more — with boolean-blind SQLi, time-based blind detection, context-aware XSS, and OAST |
+| **Scan Depth Profiles** | `fast` / `balanced` / `deep` — control scanner intensity (payload counts, blind/time/OAST checks) via `GET /api/active-scanner/depths` |
+| **Smart IDOR Check** | JSON-aware IDOR detection that compares schema vs values (cross-account data access) to eliminate false positives |
 | **Custom Checks** | User-defined regex/string checks with severity, run against captured requests |
-| **Content Discovery** | Directory and file brute-forcing with custom wordlists |
+| **Content Discovery** | Directory/file brute-forcing with wildcard/catch-all baseline filtering & auto-finding for sensitive files (`.env`, `.bak`) |
 | **Crawler** | JS-aware autonomous spidering via Playwright (headless Chromium) |
+| **Collaborator (OAST)** | Self-hosted out-of-band server (Go) — detects blind XXE, blind SSRF, DNS exfiltration via DNS/HTTP interactions with webhook forwarding |
 | **Live Audit** | Continuous passive analysis of all proxied traffic |
 
 ### ⚡ Automation & Workflows
 | Module | Description |
 |--------|-------------|
+| **Auto-Auth Keeper** | Zero-config session recovery. Silently learns your login POSTs and auto-refreshes tokens/cookies if a scan hits a 401/403. |
 | **Scheduled Scans** | Cron-based scan scheduling (e.g. nightly full scans) |
 | **Webhooks** | Instant Slack/Discord alerts on new findings |
 | **Auto-Reports** | Automated JSON/HTML/Markdown report generation with severity charts |
-| **Auto-Exploit** | CWE-to-PoC engine with interactive HTML pages, context-aware encoding, and data extraction payloads (21+ CWE types) |
+| **Auto-Exploit** | CWE-to-PoC engine with interactive HTML pages, URL analysis + DB findings lookup → smart CWE ranking, context-aware encoding, data extraction payloads (21+ CWE types) |
+| **Recommendation Engine** | Listens to `finding.created` events and auto-generates actionable recommendations — "Fuzz this parameter", "Generate exploit", "Active scan endpoint", "Retest", "Crawl", "Content discovery" |
+| **Smart Triage** | Severity-based finding grouping with filtering, retest endpoint, recent findings view |
 | **CSRF PoC Generator** | One-click proof-of-concept HTML for CSRF vulnerabilities |
 | **Scan Templates** | Save and reuse scan configurations |
 | **Param Discovery** | Automated parameter discovery and chaining |
@@ -113,7 +113,15 @@ Nyx is designed to be a modern, extensible alternative to commercial tools like 
 ### 📊 Management
 | Module | Description |
 |--------|-------------|
-| **Dashboard** | Real-time overview: findings, trends, scan activity, traffic stats |
+| **Dashboard** | Real-time overview: findings, trends, scan activity, traffic stats, fuzz job counts, active pipelines, recommendations widget |
+| **Recommendations** | Dedicated page listing all active recommendations grouped by module, with execute and dismiss actions |
+| **Smart Triage** | Severity-grouped findings with filtering, retest, recent view |
+| **Plugins** | Plugin registry — list, register, toggle, delete, reload |
+| **Settings** | System info viewer, proxy host/port/mode editor |
+| **WebSocket Messages** | Captured WebSocket frames viewer with direction labels and payload inspection |
+| **Auth Scan** | Create/manage auth profiles (form/cookie/header), run authenticated active scans with auto-exploit generation |
+| **Scan Policies** | View/manage scan policy configuration files |
+| **Automations** | Webhook CRUD + test, Cron-based schedule CRUD + toggle, Scan templates, CSRF PoC generator |
 | **Projects** | Isolated workspaces with import/export |
 | **Organizer** | Tag, flag, and annotate requests for workflow management |
 | **Scan Jobs** | Monitor and manage running scans |
@@ -399,17 +407,51 @@ Record a login sequence → Nyx analyzes JWT tokens, brute-forces weak secrets, 
 ### 🛡️ Advanced: Network MITM
 
 #### MITM (Man-in-the-Middle)
-Intercept traffic from any device on the same LAN **without configuring the target's proxy settings.** Uses ARP spoofing to redirect traffic through Nyx.
+Intercept traffic from any device on the same LAN **without configuring the target's proxy settings.** Four interception modes:
 
-**Requirements:** Admin privileges, target on same WiFi/LAN.
-**For HTTPS:** Install CA certificate on target device.
+| Mode | How it works | "Suspicious network" alert on target |
+|------|--------------|--------------------------------------|
+| **Auto** (default) | Rogue DHCP server first (stealth); if the target does not take the lease within ~20s, **ARP spoofing starts automatically** as fallback | Only if ARP fallback kicks in |
+| **ARP — Classic** | Classic ARP spoofing (periodic flooding) — instant interception | Yes (Android/iOS detect it) |
+| **ARP — Reactive** | **Stealth ARP**: no flooding — Nyx listens and answers only when the target asks "who is the gateway?" — ~10x less traffic, looks like normal ARP | No (recommended default for modern phones) |
+| **DHCP** | Rogue DHCP server only — target must forget & rejoin the Wi-Fi once | No |
+| **WiFi AP mode** | Turns the NIC into a rogue hotspot (**Nyx** SSID); the target connects to *you* and you ARE the legitimate gateway/DHCP/DNS — nothing to spoof, works even with client isolation | No (by design — you are the router) |
+
+**IPv6 targets** are handled with **RA (Router Advertisement) spoofing** — forged RAs elect Nyx as the target's IPv6 router legitimately, so IPv6 traffic is intercepted without NDP detection.
 
 **How to use:**
 1. Launch Nyx **as administrator**
-2. **MITM** tab → enter target IP → optionally set gateway (auto-detected)
-3. Toggle DNS spoofing if needed → **Start Interception**
-4. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
-5. **Stop Interception** when done
+2. **MITM** tab → click **Scan Network** to auto-discover all devices on LAN
+3. Check the devices to intercept (or type IP manually via text field + _Add_)
+4. Set gateway (auto-detected) → Toggle DNS spoofing if needed
+5. Click **Start Interception**
+6. If the target does not reconnect on its own (existing connection), the DHCP phase NAKs the target's renewal so it drops the old lease and re-negotiates — a fresh **DISCOVER** that Nyx can answer
+7. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
+8. **Stop Interception** when done
+
+> **💡 For already-connected devices:** a Wi-Fi **toggle** only renews the old lease directly with the router (which Nyx never sees). If the target is already connected, ask it to **"forget the network"** and rejoin — this forces a broadcast DISCOVER that the rogue DHCP server can win, or wait for the automatic ARP fallback.
+
+> **Scan uses a two-pass ARP probe:** fast pass (60 concurrent, 0.5s timeout) catches responsive devices, then a slow pass (20 concurrent, 1.5s timeout) probes remaining IPs. Devices with randomized MACs are identified via hostname (e.g. "S25-di-Cristian" → Samsung Galaxy S25). Multiple targets can be intercepted simultaneously.
+
+---
+
+#### Monitoring vs Decrypting a Target
+
+On any modern OS, decrypting the HTTPS traffic of a device requires that
+device to trust your certificate — there is no way around it (Android 7+
+apps even ignore user-installed CAs by default). Nyx therefore gives you two
+distinct, honest layers of visibility:
+
+| Layer | What you see | Requirement |
+|-------|-------------|-------------|
+| **Activity Monitor** (always on) | Every domain each target contacts — live, per-IP, with request counts and recency. Plus DNS queries (with DNS spoofing), plain HTTP in full, traffic volumes/timing | Nothing — works out of the box |
+| **Packets (network layer)** (auto with session) | Raw packets scoped to the selected targets + DHCP handshake frames; double-click opens a Wireshark-style dissection (layer tree + hexdump) — the fastest way to see *why* a target isn't decrypting (ClientHello → RST = cert rejection, UDP/443 = QUIC bypass, missing DISCOVER = DHCP takeover failed) | Nothing — degrades gracefully if Npcap is missing |
+| **Full decryption** | Complete request/response contents | The Nyx CA installed on the target: open `http://<nyx-ip>:18081` from the device or scan the QR shown in the app |
+
+The Activity Monitor reframes what other tools dismiss as "failed TLS
+handshakes": every ClientHello carries the hostname in clear text, so a
+transparent MITM can always tell you *where* a device is connecting — only
+*what is being said* requires its trust.
 
 ---
 
@@ -483,13 +525,26 @@ docker compose up --build -d
 ```bash
 # Backend
 cd backend
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend (separate terminal)
 cd frontend
 npm install
 npm run dev
+```
+
+### Quality gates
+
+```bash
+# Backend tests (909 tests)
+cd backend && python -m pytest tests -q --asyncio-mode=auto
+
+# Frontend: type check, lint, unit tests
+cd frontend
+npm run type-check
+npm run lint        # errors fail; warnings are tracked debt
+npm test
 ```
 
 ---
@@ -536,6 +591,7 @@ ProxyEngine (mitmproxy thread)
   │           ├── SessionHandlingEngine  — cookie jar + session recording
   │           ├── LiveAuditService       — live traffic statistics
   │           ├── ApiInspector           — classifies API (REST/GraphQL/gRPC)
+  │           ├── RecommendationEngine   — listens to `finding.created` and generates next-step suggestions
   │           └── WebSocketManager       — real-time notifications to UI
   │
   ├── InterceptorEngine (mitmproxy addon)
@@ -559,12 +615,15 @@ ProxyEngine (mitmproxy thread)
 | **Fuzzer** | `httpx.AsyncClient` | Parameter fuzzing with wordlists, sends requests bypassing the proxy |
 | **Active Scanner** | `httpx.AsyncClient` | 110+ active probes, does not pass through the proxy |
 | **Auto-Exploit** | `httpx.AsyncClient` | Generates exploits and tests them directly |
+| **RecommendationEngine** | EventBus subscriber | Passive listener on `finding.created` — no HTTP calls, pure rule engine |
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | **Desktop** | Electron 43 | Native wrapper with auto-update, system tray, one-click launch |
 | **Frontend** | React 18, TypeScript, Tailwind CSS, Vite | Modern dark-theme SPA with live WebSocket updates |
 | **Backend** | Python 3.10, FastAPI, SQLAlchemy, mitmproxy | REST/WS API, proxy engine, scanners, fuzzer, auto-exploit, reports |
+| **Collaborator** | Go 1.22, custom DNS/HTTP server | Out-of-band (OAST) interaction detection — records DNS + HTTP callbacks, forwards via webhook |
+| **Native module** | C++17, pybind11 | High-performance gRPC protobuf frame parser for inspecting gRPC traffic |
 | **Database** | SQLite (default) or PostgreSQL | Persistent storage for all traffic, findings, and configs |
 | **Orchestration** | Docker Compose | One-command deployment |
 
@@ -641,6 +700,63 @@ The installer will be generated in `desktop/dist/`.
 | `API_HOST` | `0.0.0.0` | API listen address |
 | `API_PORT` | `8000` | API listen port |
 | `MAX_BODY_SIZE_BYTES` | `10485760` | Max request/response body size (10 MB) |
+| `MAX_STORED_REQUESTS` | `100000` | Max intercepted requests kept in DB (0 = unlimited) |
+| `REQUEST_RETENTION_HOURS` | `168` | Hours to keep intercepted requests (7 days) |
+| `NYX_SQLCIPHER_KEY` | *(empty)* | Set to enable SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`) |
+| `LOG_FORMAT` | `text` | Set to `json` for structured JSON logging (useful for ELK/Grafana) |
+
+### Compliance Reports
+
+Nyx generates compliance reports automatically from your findings:
+
+```bash
+# OWASP Top 10 2021
+GET /api/compliance/owasp
+
+# PCI-DSS v4.0
+GET /api/compliance/pci-dss
+
+# GDPR Art. 32
+GET /api/compliance/gdpr
+
+# All frameworks combined
+GET /api/compliance/full
+
+# Quick dashboard status
+GET /api/compliance/status
+```
+
+### SQLCipher Encryption at-Rest
+
+Enable AES-256-CBC encryption for the database:
+
+```bash
+pip install pysqlcipher3
+export NYX_SQLCIPHER_KEY="your-strong-password"
+```
+
+The database file (`nyx.db`) is encrypted with the key. Without the key, the file is unreadable. Recommended for: production deployments, compliance (PCI-DSS §3.4, GDPR Art. 32), and shared environments.
+
+### Prometheus Metrics
+
+Nyx exposes a `/metrics` endpoint in Prometheus text format:
+
+```bash
+curl http://127.0.0.1:8000/metrics
+```
+
+Metrics include: `proxy_requests_total`, `proxy_responses_total`, `proxy_responses_2xx/4xx/5xx_total`, `mitm_sessions_active`, `mitm_arp/dhcp/ndp_spoofs_total`, `http_errors_5xx_total`, `nyx_process_uptime_seconds`.
+
+### Structured JSON Logging
+
+For ELK/Loki/Grafana integration:
+
+```bash
+set LOG_FORMAT=json
+Nyx.exe 2>&1 | jq .
+```
+
+Output format: `{"ts": "...", "level": "INFO", "logger": "...", "msg": "..."}`
 
 ### Proxy Configuration
 
@@ -678,7 +794,7 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
 ### Running Tests
 
 ```bash
-# Backend tests (455+ tests covering all modules)
+# Backend tests (900+ tests covering all modules)
 cd backend
 python -m pytest tests/ -v --asyncio-mode=auto
 
@@ -705,16 +821,24 @@ nyx/
 │   ├── core/                # Database, events, storage, scope, OS abstractions
 │   ├── modules/             # Scanner, fuzzer, auto-exploit, decoder, etc.
 │   ├── reporter/            # Report generation (HTML/JSON/MD)
-│   ├── tests/               # 437+ pytest tests (CI-verified)
+│   ├── tests/               # 460+ pytest tests (CI-verified)
 │   └── wordlists/           # Built-in wordlists for fuzzer
 ├── frontend/                # React/TypeScript SPA
 │   ├── src/components/      # UI component directories
 │   ├── src/api/             # API client and endpoints
 │   └── src/store/           # Zustand state management
 ├── desktop/                 # Electron desktop wrapper
+├── collaborator/            # Go-based OAST server (DNS/HTTP callbacks)
+│   ├── dns/                 # DNS listener for interaction detection
+│   ├── http/                # HTTP handler for interaction recording
+│   └── webhook/             # Slack/Discord/custom webhook forwarding
+├── native/                  # C++ native modules
+│   └── grpc_parser/         # gRPC protobuf frame parser (pybind11 bindings)
+├── docs/                    # User guide, test guide, report docs
 ├── .github/workflows/       # CI/CD: build & test on push, release on tag
-├── docker-compose.yml       # Production deployment (PostgreSQL)
-└── docker-compose.dev.yml   # Development with hot-reload
+├── .dockerignore            # Docker build exclusions
+├── docker-compose.yml       # Production deployment (PostgreSQL + nginx)
+└── docker-compose.dev.yml   # Dev PostgreSQL only
 ```
 
 ---
@@ -723,8 +847,24 @@ nyx/
 
 This project is licensed under the [MIT License](LICENSE).
 
+## Contributors
+
+| | What they built |
+|---|---|
+| **[Terminalkid09](https://github.com/Terminalkid09)** | Creator and lead developer — the entire platform: proxy engine, MITM interception (ARP/DHCP/NDP, auto-fallback, reactive ARP, WiFi AP mode), all scanning modules (passive/active scanner, fuzzer, auto-exploit, session handling, match & replace), Repeater, Interceptor, decoding tools, storage/session architecture, Electron desktop app, CI and release pipeline. Network-layer MITM integration: dedicated MITM session, target-scoped packet feed with Wireshark-style detail, session sync and reliability fixes across the stack |
+| **[traynertunder2047](https://github.com/traynertunder2047)** | Network capture layer: passive packet engine (pcap, BPF, interface watchdog), protocol decoders (TLS, HTTP, HTTP/2, DNS, QUIC), TCP/UDP stream reassembly, live stats, PCAP/PCAPNG support, ARP spoof detector, ICMP tunnel detector, UDP modifier and the Network tab UI |
+
+## Authorized Use Only
+
+Nyx is a security testing tool intended for **authorized penetration testing,
+security research, and education**. Intercepting network traffic from devices
+you do not own or do not have explicit written permission to test is **illegal**
+in most jurisdictions (computer fraud and abuse laws, wiretapping statutes).
+Install CA certificates only on devices you are authorized to test, and remove
+them when the engagement ends. The authors accept no liability for misuse.
+
 ---
 
 <p align="center">
-  Built with ❤️ by <a href="https://github.com/Terminalkid09">Terminalkid09</a>
+  Built with ❤️ by <a href="https://github.com/Terminalkid09">Terminalkid09</a> &amp; <a href="https://github.com/traynertunder2047">traynertunder2047</a>
 </p>

@@ -26,32 +26,29 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nyx}:${POSTGRES_PASSWORD:-nyx}@postgres:5432/${POSTGRES_DB:-nyx}
-      PROXY_HOST: 0.0.0.0
-      PROXY_PORT: 8080
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      DEBUG: ${DEBUG:-false}
       API_HOST: 0.0.0.0
       API_PORT: 8000
+      PROXY_HOST: 0.0.0.0
+      PROXY_PORT: 8080
       MAX_BODY_SIZE_BYTES: 10485760
-      DEBUG: ${DEBUG:-false}
-      SECRET_KEY: ${SECRET_KEY}
     depends_on:
       postgres:
         condition: service_healthy
 
-  # Collaborator (standalone OAST)
   collaborator:
     build:
       context: ./collaborator
     ports:
       - "127.0.0.1:9999:9999"
+      - "127.0.0.1:9090:9090"
     environment:
       COLLAB_DOMAIN: ${COLLAB_DOMAIN:-oast.nyx.local}
       COLLAB_SECRET: ${COLLAB_SECRET:-secret}
       COLLAB_HTTP_PORT: "9999"
-      COLLAB_DNS_PORT: "53"
       COLLAB_API_PORT: "9090"
       COLLAB_TTL_HOURS: "24"
-    cap_add:
-      - NET_BIND_SERVICE
     restart: unless-stopped
 
   frontend:
@@ -60,6 +57,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:80:80"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

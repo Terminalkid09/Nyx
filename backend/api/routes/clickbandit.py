@@ -5,6 +5,7 @@ from api.deps import get_db
 from core.storage.models import ClickbanditConfig
 from modules.clickbandit.service import ClickbanditService
 from pydantic import BaseModel
+from datetime import datetime
 import uuid
 
 router = APIRouter(prefix="/api/clickbandit", tags=["clickbandit"])
@@ -32,8 +33,8 @@ class ClickbanditResponse(BaseModel):
     session_id: uuid.UUID
     name: str
     target_url: str
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     layers: list
     config: dict
 

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Globe, Play, XCircle, Settings, List, FileText, ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
-import { apiClient } from '../../api/client'
+import {  } from '../../api/client'
 import { startCrawl, stopCrawl, listCrawlJobs, getCrawlStatus, type CrawlJob } from '../../api/endpoints/crawler'
+import { useJobsStore } from '../../store/useJobsStore'
 
 function KeyValueEditor({ pairs, onChange, keyPlaceholder, valuePlaceholder }: {
   pairs: [string, string][]
@@ -173,6 +174,7 @@ function LoginMacroEditor({ steps, onChange }: {
 }
 
 export function Crawler() {
+  const { jobs: storedJobs, setJob: storeJob, clearJob: clearStoredJob } = useJobsStore()
   const [startUrl, setStartUrl] = useState('')
   const [maxDepth, setMaxDepth] = useState(3)
   const [maxPages, setMaxPages] = useState(50)
@@ -235,6 +237,7 @@ export function Crawler() {
       })
       setCurrentJobId(job.id)
       setSelectedJobId(job.id)
+      storeJob('crawler', job.id, 'running')
       setStatus('Running...')
       refreshJobs()
     } catch (err: any) {
@@ -266,6 +269,7 @@ export function Crawler() {
           setStatus(active.status)
           if (active.status === 'completed' || active.status === 'stopped' || active.status === 'failed') {
             setLoading(false)
+            clearStoredJob('crawler')
             if (pollRef.current) {
               clearInterval(pollRef.current)
               pollRef.current = null
@@ -293,6 +297,18 @@ export function Crawler() {
   useEffect(() => {
     refreshJobs()
   }, [refreshJobs])
+
+  // Resume a still-running crawl after a tab switch.
+  useEffect(() => {
+    const saved = storedJobs.crawler
+    if (saved && saved.id) {
+      setCurrentJobId(saved.id)
+      setSelectedJobId(saved.id)
+      setLoading(true)
+      refreshJobs()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const viewJob = async (jobId: string) => {
     setSelectedJobId(jobId)

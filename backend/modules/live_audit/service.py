@@ -46,6 +46,10 @@ class LiveAuditService:
 
         self.event_bus.subscribe("request.captured", self._on_request)
         self.event_bus.subscribe("response.received", self._on_response)
+        # Findings are counted from the canonical "finding.created" events —
+        # the PassiveScanner runs exactly once via its own bus subscription,
+        # so re-running checks here would only duplicate work.
+        self.event_bus.subscribe("finding.created", self._on_finding_created)
 
         if self.auto_scan_engine:
             self.auto_scan_engine._running = True
@@ -63,6 +67,7 @@ class LiveAuditService:
         self._running = False
         self.event_bus.unsubscribe("request.captured", self._on_request)
         self.event_bus.unsubscribe("response.received", self._on_response)
+        self.event_bus.unsubscribe("finding.created", self._on_finding_created)
         logger.info("Live Audit stopped: %s findings from %s requests",
                     self._stats["passive_findings"] + self._stats["active_findings"],
                     self._stats["requests_analyzed"])
@@ -88,16 +93,19 @@ class LiveAuditService:
             return
         self._stats["responses_analyzed"] += 1
 
-        if self.auto_scan_engine:
-            from modules.scanner.passive.scanner import PassiveScanner
-            try:
-                findings = await self.auto_scan_engine._run_passive(event)
-                if findings:
-                    count = len(findings) if isinstance(findings, list) else 1
-                    self._stats["passive_findings"] += count
-            except Exception as e:
-                self._stats["errors"] += 1
-                logger.error("Passive scan error: %s", e)
+        if self._config["log_all"]:
+            self._log("response_analyzed", {
+                "url": event.get("url", ""),
+                "status": event.get("status", ""),
+            })
+
+    async def _on_finding_created(self, event: dict):
+        if not self._running:
+            return
+        if event.get("source") == "active":
+            self._stats["active_findings"] += 1
+        else:
+            self._stats["passive_findings"] += 1
 
     def _log(self, event_type: str, data: dict):
         entry = {

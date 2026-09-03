@@ -2,6 +2,7 @@ import logging
 from core.events.bus import EventBus
 from modules.scanner.base_check import BaseCheck
 from core.storage.finding_events import persist_results
+from modules.scanner.cvss_mapper import get_cvss_for_cwe
 from modules.scanner.passive.checks.alapca import AlapcaCheck
 from modules.scanner.passive.checks.auth_account_lockout import AuthAccountLockoutCheck
 from modules.scanner.passive.checks.auth_default_creds import AuthDefaultCredsCheck
@@ -22,6 +23,8 @@ from modules.scanner.passive.checks.biz_otp_bypass import BizOtpBypassCheck
 from modules.scanner.passive.checks.biz_price_manipulation import BizPriceManipulationCheck
 from modules.scanner.passive.checks.biz_quantity import BizQuantityCheck
 from modules.scanner.passive.checks.biz_skip_step import BizSkipStepCheck
+from modules.scanner.passive.checks.passive_info_disclosure import PassiveInfoDisclosureCheck
+from modules.scanner.passive.checks.passive_tech_fingerprint import PassiveTechFingerprintCheck
 from modules.scanner.passive.checks.biz_unlimited_upload import BizUnlimitedUploadCheck
 from modules.scanner.passive.checks.cache_deception_ct import CacheDeceptionCtCheck
 from modules.scanner.passive.checks.cache_host_header import CacheHostHeaderCheck
@@ -218,6 +221,7 @@ logger = logging.getLogger(__name__)
 class PassiveScanner:
     def __init__(self, event_bus: EventBus):
         self.event_bus = event_bus
+        self.seen_findings = set()
         self.checks: list[BaseCheck] = [
             AlapcaCheck(),
             AuthAccountLockoutCheck(),
@@ -428,6 +432,9 @@ class PassiveScanner:
             XxeSvgUploadCheck(),
             XxeXincludeCheck(),
             XxeXlsxUploadCheck(),
+            # Advanced passive checks (deepseek v4-pro)
+            PassiveInfoDisclosureCheck(),
+            PassiveTechFingerprintCheck(),
         ]
 
     def register(self):
@@ -440,12 +447,29 @@ class PassiveScanner:
         for check in self.checks:
             try:
                 results = await check.run(event, {})
-                await persist_results(self.event_bus, results, event, check.name)
+                
+                unique_results = []
                 for result in results:
                     if result.triggered:
+                        dedup_key = f"{result.cwe}_{result.title}_{event.get('url', '')}"
+                        if dedup_key in self.seen_findings:
+                            continue
+                        self.seen_findings.add(dedup_key)
+                        
+                        cvss_info = get_cvss_for_cwe(result.cwe) if result.cwe else None
+                        if cvss_info:
+                            result.cvss_score = cvss_info["score"]
+                            result.cvss_vector = cvss_info["vector"]
+                            if not hasattr(result, 'severity') or result.severity == "info":
+                                result.severity = cvss_info["severity"]
+                        
+                        unique_results.append(result)
                         logger.info(
-                            "Passive check %s triggered: %s",
-                            check.name, result.title,
+                            "Passive check %s triggered: %s (CVSS: %s)",
+                            check.name, result.title, getattr(result, 'cvss_score', 'N/A')
                         )
+                
+                if unique_results:
+                    await persist_results(self.event_bus, unique_results, event, check.name, source="passive")
             except Exception as e:
                 logger.error("Passive check %s failed: %s", check.name, e)

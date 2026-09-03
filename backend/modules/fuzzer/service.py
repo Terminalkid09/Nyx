@@ -198,14 +198,33 @@ class FuzzerService:
             return []
 
         p = Path(path)
-        if p.is_absolute() or os.path.isabs(path):
-            if not p.exists() or not p.is_file():
+        # Windows-style drive letters must be treated as absolute on every OS:
+        # on POSIX, Path("C:/Windows/win.ini").is_absolute() is False and it
+        # would fall through to the relative branch and raise. PurePath cannot
+        # parse foreign-platform syntax, so match the drive prefix explicitly.
+        _looks_abs = p.is_absolute() or os.path.isabs(path) or re.match(r"^[A-Za-z]:[/\\]", path)
+        if _looks_abs:
+            # Absolute paths are only honored for the wordlist directories Nyx
+            # itself exposes via list_wordlists() — reading arbitrary files
+            # from anywhere on disk is not acceptable.
+            allowed_roots = [
+                self.wordlists_dir.resolve(),
+                (Path(__file__).parent / "wordlists").resolve(),
+            ]
+            try:
+                resolved = p.resolve()
+            except OSError:
+                return []
+            if not any(resolved.is_relative_to(root) for root in allowed_roots):
+                logger.warning("Blocked wordlist outside allowed directories: %s", path)
+                return []
+            if not resolved.exists() or not resolved.is_file():
                 logger.warning("Wordlist not found: %s", path)
                 return []
-            if p.suffix not in (".txt",):
+            if resolved.suffix not in (".txt",):
                 logger.warning("Only .txt wordlists allowed: %s", path)
                 return []
-            lines = [line.strip() for line in p.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+            lines = [line.strip() for line in resolved.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
             return lines[:MAX_WORDLIST_SIZE]
 
         wl_path = self.wordlists_dir / path

@@ -38,6 +38,9 @@ export interface NyxFinding {
   remediation: string | null
   cwe: string | null
   cvss_score: number | null
+  cvss_vector?: string | null
+  url?: string
+  param?: string
 }
 
 export interface NyxSession {
@@ -69,6 +72,16 @@ export interface InterceptedItem {
   created_at: string
   direction: string
   status: string
+  method: string | null
+  url: string | null
+  headers: Record<string, string> | null
+  body: string | null
+  host: string | null
+  path: string | null
+  http_version: string | null
+  status_code: number | null
+  response_headers: Record<string, string> | null
+  response_body: string | null
   modified_method: string | null
   modified_url: string | null
   modified_headers: Record<string, string> | null

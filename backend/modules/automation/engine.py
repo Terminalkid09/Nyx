@@ -23,9 +23,16 @@ class AutoScanEngine:
         self._queue_task = None
         self._running = False
 
-        self.auto_active_scan = True
-        self.max_concurrent_active_scans = 3
+        # Active auto-scanning is OFF by default: a full active scan (148
+        # checks) on every captured URL with query params saturated the event
+        # loop (health took ~13s, the whole UI froze — Proxy tab and Activity
+        # Monitor stopped updating). The passive scanner still analyses every
+        # request for free; active scanning is opt-in via the config API.
+        self.auto_active_scan = False
+        self.max_concurrent_active_scans = 1
         self.scan_delay_ms = 500
+        # Even when enabled, never scan more than this many params per URL.
+        self.max_params_per_scan = 12
 
         self._learning_mode = True
         self._learning_domains: set[str] = set()
@@ -58,8 +65,6 @@ class AutoScanEngine:
 
         self._add_discovered(url, 'request', event)
 
-        await self._run_passive(event)
-
         new_params = self._extract_new_params(url)
         if new_params and self.auto_active_scan:
             self._enqueue_scan(url, new_params, event)
@@ -69,8 +74,6 @@ class AutoScanEngine:
             self._add_discovered(u, 'request_extracted', event)
 
     async def _on_response_received(self, event: dict):
-        await self._run_passive(event)
-
         body = event.get('body', '') or ''
         extracted = self._extract_urls_from_body(body, event.get('content_type', ''))
         for u in extracted:
@@ -84,12 +87,6 @@ class AutoScanEngine:
         redirect_url = self._get_redirect_url(event)
         if redirect_url:
             self._add_discovered(redirect_url, 'redirect', event)
-
-    async def _run_passive(self, event: dict):
-        try:
-            await self.passive_scanner._on_response(event)
-        except Exception as e:
-            logger.error("Passive scan error: %s", e)
 
     def _add_discovered(self, url: str, source: str, event: dict):
         if url not in self.discovered_urls:
@@ -166,7 +163,10 @@ class AutoScanEngine:
         priority = 2 if API_PATTERNS.search(url) else 1
         self.pending_queue.append({
             'url': url,
-            'params': params,
+            # Cap the param set: scanning hundreds of params per URL (video
+            # stream URLs with 17+ params were common) multiplies the request
+            # count by 148 checks each — the resource bomb that froze the app.
+            'params': params[:self.max_params_per_scan],
             'priority': priority,
             'host': parsed.hostname or '',
             'discovered_at': datetime.now(timezone.utc).isoformat(),
@@ -211,7 +211,12 @@ class AutoScanEngine:
         }
 
         try:
-            results = await self.active_scanner.run_checks(base_request, params)
+            # "fast" depth: skips heavy checks (blind/time-based/OAST) and
+            # caps payloads — full-depth scans on every captured URL are what
+            # froze the backend (see __init__ note).
+            results = await self.active_scanner.run_checks(
+                base_request, params, depth="fast"
+            )
             logger.info("Scan of %s complete: %d findings", url, len(results))
         except Exception as e:
             logger.error("Active scan of %s failed: %s", url, e)

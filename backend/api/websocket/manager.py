@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from fastapi import WebSocket
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 class WebSocketManager:
     def __init__(self, event_bus: EventBus):
         self._connections: list[WebSocket] = []
+        self._lock = asyncio.Lock()
         self._event_bus = event_bus
         self._subscribed_events: list[str] = [
             "request.captured",
@@ -19,6 +21,10 @@ class WebSocketManager:
             "scan.active.completed",
             "fuzz.progress",
             "collaborator.hit",
+            "interceptor.request.paused",
+            "interceptor.response.paused",
+            "interceptor.item.forwarded",
+            "interceptor.item.dropped",
         ]
         self._subscribe_all(event_bus)
 
@@ -32,22 +38,31 @@ class WebSocketManager:
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self._connections.append(ws)
+        async with self._lock:
+            self._connections.append(ws)
 
-    def disconnect(self, ws: WebSocket):
-        if ws in self._connections:
-            self._connections.remove(ws)
+    async def disconnect(self, ws: WebSocket):
+        async with self._lock:
+            if ws in self._connections:
+                self._connections.remove(ws)
 
     async def _broadcast(self, event: NyxEvent):
         data = json.dumps(
             event if isinstance(event, dict) else event.model_dump(),
             default=str,
         )
+        async with self._lock:
+            snapshot = list(self._connections)
         dead: list[WebSocket] = []
-        for ws in self._connections:
+        for ws in snapshot:
             try:
                 await ws.send_text(data)
             except Exception:
                 dead.append(ws)
-        for ws in dead:
-            self._connections.remove(ws)
+        if dead:
+            async with self._lock:
+                for ws in dead:
+                    try:
+                        self._connections.remove(ws)
+                    except ValueError:
+                        pass

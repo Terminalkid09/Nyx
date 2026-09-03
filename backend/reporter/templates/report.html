@@ -187,7 +187,7 @@
   <div class="meta-row">
     {% if f.cwe %}<span class="cwe">{{ f.cwe }}</span>{% endif %}
     {% if f.module %}<span>Module: {{ f.module }}</span>{% endif %}
-    {% if f.cvss_score %}<span>CVSS: {{ f.cvss_score }}</span>{% endif %}
+    {% if f.cvss_score %}<span>CVSS: <strong>{{ f.cvss_score }}</strong>{% if f.cvss_vector %} &mdash; <code style="font-size:10px">{{ f.cvss_vector }}</code>{% endif %}</span>{% endif %}
   </div>
   {% if f.evidence %}
   <details class="evidence">

@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nyx Browser</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #030712;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ─── Top chrome / toolbar ─── */
+  #chrome {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    background: #0f172a;
+    border-bottom: 1px solid #1e293b;
+    z-index: 2147483647;
+    height: 44px;
+    -webkit-app-region: drag;
+  }
+
+  .nav-btn {
+    -webkit-app-region: no-drag;
+    background: transparent; border: none; color: #64748b;
+    cursor: pointer; padding: 5px 7px; border-radius: 6px;
+    font-size: 15px; line-height: 1; transition: background .12s, color .12s, transform .08s;
+    min-width: 30px; display: flex; align-items: center; justify-content: center;
+  }
+  .nav-btn:hover { background: #1e293b; color: #e2e8f0; }
+  .nav-btn:active { background: #334155; transform: scale(.9); }
+  .nav-btn:disabled { opacity: .25; cursor: default; pointer-events: none; }
+  .nav-btn.flash { background: #7c3aed; color: #fff; }
+
+  /* ─── URL bar ─── */
+  #url-bar {
+    -webkit-app-region: no-drag;
+    flex: 1; display: flex; align-items: center;
+    background: #1e293b; border: 1.5px solid #334155;
+    border-radius: 8px; padding: 3px 10px; margin: 0 4px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  #url-bar:focus-within { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,.18); }
+
+  #lock-icon { font-size: 12px; margin-right: 6px; flex-shrink: 0; }
+  #lock-icon.secure { color: #34d399; }
+  #lock-icon.insecure { color: #f59e0b; }
+  #lock-icon.error { color: #f87171; }
+
+  #url-input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: #e2e8f0; font-size: 13px; font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    padding: 3px 0;
+  }
+  #url-input::placeholder { color: #475569; }
+  #url-input::selection { background: #7c3aed44; }
+
+  #capture-badge {
+    -webkit-app-region: no-drag;
+    font-size: 10px; font-weight: 700; color: #a855f7;
+    background: rgba(168,85,247,.12); border: 1px solid rgba(168,85,247,.25);
+    padding: 2px 7px; border-radius: 4px; letter-spacing: .3px;
+    margin-left: 4px; flex-shrink: 0;
+  }
+
+  /* ─── Loading bar ─── */
+  #loading-bar {
+    position: fixed; top: 44px; left: 0; right: 0; height: 2px;
+    z-index: 2147483647; background: transparent; overflow: hidden;
+  }
+  #loading-fill {
+    height: 100%; width: 0; background: linear-gradient(90deg, #7c3aed, #a855f7, #6366f1);
+    border-radius: 2px; transition: width .3s ease;
+  }
+  #loading-bar.active #loading-fill {
+    animation: load-progress 2s ease-in-out infinite;
+  }
+  @keyframes load-progress {
+    0%   { width: 0%; opacity: 1; }
+    60%  { width: 80%; opacity: 1; }
+    100% { width: 100%; opacity: 0; }
+  }
+
+  /* ─── Webview ─── */
+  #page {
+    position: fixed; top: 46px; left: 0; right: 0; bottom: 22px;
+    border: none; width: 100%; height: calc(100vh - 68px);
+  }
+
+  /* ─── Error overlay (covers the black screen) ─── */
+  #error-overlay {
+    position: fixed; top: 46px; left: 0; right: 0; bottom: 22px;
+    background: #030712; z-index: 1000;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; padding: 40px; text-align: center;
+  }
+  #error-overlay.visible { display: flex; }
+  .error-icon { font-size: 52px; filter: grayscale(.3); }
+  .error-title { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+  .error-desc { font-size: 13px; color: #64748b; max-width: 480px; line-height: 1.6; }
+  .error-code { font-size: 12px; font-family: monospace; color: #475569;
+    background: #0f172a; padding: 4px 12px; border-radius: 6px; border: 1px solid #1e293b; }
+  .error-tips { margin-top: 8px; }
+  .error-tips p { font-size: 12px; color: #475569; margin: 3px 0; }
+  .error-tips p strong { color: #94a3b8; }
+  .btn-retry {
+    margin-top: 8px; padding: 8px 24px; background: #7c3aed; border: none;
+    color: #fff; border-radius: 8px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background .15s, transform .08s;
+  }
+  .btn-retry:hover { background: #6d28d9; }
+  .btn-retry:active { transform: scale(.96); }
+
+  /* ─── Status bar ─── */
+  #status-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; height: 22px;
+    background: #0f172a; border-top: 1px solid #1e293b;
+    z-index: 2147483647; display: flex; align-items: center;
+    padding: 0 12px; gap: 12px; font-size: 10px; font-family: monospace; color: #475569;
+  }
+  #status-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #proxy-indicator {
+    color: #a855f7; font-weight: 700; flex-shrink: 0;
+    display: flex; align-items: center; gap: 4px;
+  }
+  #proxy-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #a855f7;
+    box-shadow: 0 0 6px #a855f7;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Toolbar ── -->
+<div id="chrome">
+  <button id="back-btn" class="nav-btn" title="Back (Alt+←)">&#9664;</button>
+  <button id="forward-btn" class="nav-btn" title="Forward (Alt+→)">&#9654;</button>
+  <button id="refresh-btn" class="nav-btn" title="Refresh (F5)" style="font-size:18px;">&#8635;</button>
+
+  <div id="url-bar">
+    <span id="lock-icon" title="">🔒</span>
+    <input id="url-input" type="text" placeholder="Search or enter a URL..." spellcheck="false" autofocus>
+  </div>
+
+  <span id="capture-badge" title="Traffic is being proxied through Nyx on 127.0.0.1:8080">⬤ PROXIED</span>
+</div>
+
+<!-- ── Progress bar ── -->
+<div id="loading-bar"><div id="loading-fill"></div></div>
+
+<!-- ── Webview ── -->
+<webview id="page" src="about:blank" partition="persist:nyx-browser" allowpopups></webview>
+
+<!-- ── Error overlay (shown instead of blank/black screen) ── -->
+<div id="error-overlay">
+  <div class="error-icon">🌐</div>
+  <div class="error-title" id="err-title">Connection Failed</div>
+  <div class="error-desc" id="err-desc">Nyx could not connect to this site.</div>
+  <div class="error-code" id="err-code"></div>
+  <div class="error-tips" id="err-tips"></div>
+  <button class="btn-retry" id="btn-retry">Try Again</button>
+</div>
+
+<!-- ── Status bar ── -->
+<div id="status-bar">
+  <span id="status-text">Ready — type a URL and press Enter</span>
+  <span id="proxy-indicator"><span id="proxy-dot"></span> 127.0.0.1:8080</span>
+</div>
+
+<script>
+'use strict';
+
+const page        = document.getElementById('page');
+const urlInput    = document.getElementById('url-input');
+const backBtn     = document.getElementById('back-btn');
+const forwardBtn  = document.getElementById('forward-btn');
+const refreshBtn  = document.getElementById('refresh-btn');
+const loadingBar  = document.getElementById('loading-bar');
+const statusText  = document.getElementById('status-text');
+const errOverlay  = document.getElementById('error-overlay');
+const errTitle    = document.getElementById('err-title');
+const errDesc     = document.getElementById('err-desc');
+const errCode     = document.getElementById('err-code');
+const errTips     = document.getElementById('err-tips');
+const lockIcon    = document.getElementById('lock-icon');
+const btnRetry    = document.getElementById('btn-retry');
+
+// ─── Error codes ───────────────────────────────────────────────────────────
+const ERROR_MAP = {
+  '-2':   { title: 'Connection Failed',        desc: 'The server refused the connection. It may be offline or blocking requests.' },
+  '-3':   { title: 'DNS Lookup Failed',         desc: 'The domain name could not be resolved. Check your connection or DNS settings.' },
+  '-6':   { title: 'Connection Timed Out',      desc: 'The server took too long to respond.' },
+  '-7':   { title: 'Proxy Connection Error',    desc: 'Nyx proxy (127.0.0.1:8080) could not be reached. Make sure the backend is running.' },
+  '-105': { title: 'Name Not Resolved',         desc: 'Could not resolve the hostname. Check your spelling or network connection.' },
+  '-106': { title: 'No Internet Connection',    desc: 'Your machine appears to be offline.' },
+  '-109': { title: 'Address Unreachable',       desc: 'The IP address of the server could not be reached.' },
+  '-201': { title: 'SSL Certificate Error',     desc: 'The site\'s certificate is invalid or untrusted. The Nyx CA may not be installed.' },
+  '-202': { title: 'SSL Certificate Revoked',   desc: 'The site\'s SSL certificate has been revoked.' },
+  '-200': { title: 'SSL Connection Error',      desc: 'A secure connection could not be established.' },
+  '-300': { title: 'Invalid URL',               desc: 'The URL you entered is not valid.' },
+  '-310': { title: 'Too Many Redirects',        desc: 'This page redirected too many times.' },
+  '-21':  { title: 'Network Changed',           desc: 'Your network connection changed while loading the page.' },
+};
+
+const PROXY_TIPS = `<p><strong>Tip:</strong> For HTTP sites (non-HTTPS) traffic is fully intercepted and visible in Proxy Log.</p>
+<p><strong>Tip:</strong> For HTTPS, install the Nyx CA certificate on the target device to decrypt content.</p>`;
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+let currentUrl = '';
+
+function flash(el) {
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 180);
+}
+
+function setLoading(active) {
+  if (active) loadingBar.classList.add('active');
+  else        loadingBar.classList.remove('active');
+}
+
+function updateNavButtons() {
+  try {
+    backBtn.disabled    = !page.canGoBack();
+    forwardBtn.disabled = !page.canGoForward();
+  } catch {}
+}
+
+function hideError() {
+  errOverlay.classList.remove('visible');
+}
+
+function showError(code, description, failedUrl) {
+  setLoading(false);
+  const info = ERROR_MAP[String(code)] || { title: 'Page Load Error', desc: description || 'An unknown error occurred.' };
+
+  errTitle.textContent = info.title;
+  errDesc.textContent  = info.desc;
+  errCode.textContent  = `Error ${code}: ${description || 'ERR_UNKNOWN'}`;
+
+  // Proxy-specific advice
+  const isProxyErr = ['-7', '-105', '-106'].includes(String(code));
+  const isSSLErr   = ['-200', '-201', '-202'].includes(String(code));
+
+  let tips = '';
+  if (isProxyErr || isSSLErr) tips = PROXY_TIPS;
+  if (isSSLErr) tips += `<p style="margin-top:6px;color:#f59e0b">⚠ Install the Nyx CA cert from Dashboard → CA Certificate to decrypt HTTPS.</p>`;
+
+  errTips.innerHTML = tips;
+
+  btnRetry._failedUrl = failedUrl || currentUrl;
+  errOverlay.classList.add('visible');
+  statusText.textContent = `⚠ ${info.title}`;
+  lockIcon.textContent = '⚠';
+  lockIcon.className   = 'error';
+}
+
+function navigate(url) {
+  let finalUrl = url.trim();
+  if (!finalUrl) return;
+  if (!/^https?:\/\//i.test(finalUrl)) {
+    if (/^[\w.-]+\.[a-z]{2,}/i.test(finalUrl)) {
+      finalUrl = 'http://' + finalUrl;
+    } else {
+      finalUrl = 'https://www.google.com/search?q=' + encodeURIComponent(finalUrl);
+    }
+  }
+  hideError();
+  statusText.textContent = 'Navigating…';
+  setLoading(true);
+  currentUrl = finalUrl;
+  urlInput.value = finalUrl;
+  try { page.loadURL(finalUrl); } catch(e) { showError(0, e.message, finalUrl); }
+}
+
+// ─── Retry button ──────────────────────────────────────────────────────────
+btnRetry.addEventListener('click', () => {
+  const url = btnRetry._failedUrl || urlInput.value;
+  if (url) navigate(url);
+});
+
+// ─── URL bar ───────────────────────────────────────────────────────────────
+urlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    navigate(urlInput.value);
+  }
+  if (e.key === 'Escape') urlInput.blur();
+});
+
+urlInput.addEventListener('focus', () => urlInput.select());
+
+// ─── Nav buttons ───────────────────────────────────────────────────────────
+backBtn.addEventListener('click', () => {
+  flash(backBtn); hideError(); setLoading(true);
+  statusText.textContent = 'Going back…';
+  try { page.goBack(); } catch {}
+});
+
+forwardBtn.addEventListener('click', () => {
+  flash(forwardBtn); hideError(); setLoading(true);
+  statusText.textContent = 'Going forward…';
+  try { page.goForward(); } catch {}
+});
+
+refreshBtn.addEventListener('click', () => {
+  flash(refreshBtn); hideError(); setLoading(true);
+  statusText.textContent = 'Refreshing…';
+  try { page.reload(); } catch {}
+});
+
+// ─── Webview events ────────────────────────────────────────────────────────
+page.addEventListener('did-start-loading', () => {
+  hideError();
+  setLoading(true);
+  statusText.textContent = 'Loading…';
+  lockIcon.textContent = '🔒';
+  lockIcon.className   = '';
+});
+
+page.addEventListener('did-stop-loading', () => {
+  setLoading(false);
+  statusText.textContent = 'Done';
+  updateNavButtons();
+});
+
+page.addEventListener('did-navigate', (e) => {
+  currentUrl = e.url;
+  urlInput.value = e.url;
+  statusText.textContent = e.url;
+  hideError();
+  setLoading(false);
+  updateNavButtons();
+
+  // Update lock icon based on protocol
+  const isSecure = e.url.startsWith('https://');
+  if (isSecure) {
+    lockIcon.textContent = '🔒'; lockIcon.className = 'secure'; lockIcon.title = 'Secure (HTTPS)';
+  } else {
+    lockIcon.textContent = '⚠'; lockIcon.className = 'insecure'; lockIcon.title = 'Not secure (HTTP)';
+  }
+});
+
+page.addEventListener('did-navigate-in-page', (e) => {
+  currentUrl = e.url;
+  urlInput.value = e.url;
+  updateNavButtons();
+});
+
+page.addEventListener('page-title-updated', (e) => {
+  if (e.title) document.title = e.title + ' — Nyx Browser';
+});
+
+// ── Core fix: show a proper error page instead of a black screen ──
+page.addEventListener('did-fail-load', (e) => {
+  // Ignore -3 on about:blank or empty urls (initial state), and aborted loads (-3 = ERR_ABORTED is actually -3 in some versions)
+  // ERR_ABORTED = -3 happens on navigation cancels, not real errors
+  if (e.errorCode === -3 && (!e.validatedURL || e.validatedURL === 'about:blank')) return;
+  // Ignore intentional aborts (user navigated away before page finished)
+  if (e.errorCode === -3) return;
+
+  showError(e.errorCode, e.errorDescription, e.validatedURL);
+});
+
+page.addEventListener('page-favicon-updated', (e) => {
+  if (e.favicons && e.favicons.length) {
+    // Could set app icon here in future
+  }
+});
+
+// Handle new-window requests (target="_blank" etc.)
+page.addEventListener('new-window', (e) => {
+  // Load in same webview instead of spawning a new window
+  e.preventDefault();
+  navigate(e.url);
+});
+
+// ─── Keyboard shortcuts ────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+    e.preventDefault(); urlInput.select(); urlInput.focus();
+  }
+  if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && e.key === 'r')) {
+    e.preventDefault(); flash(refreshBtn); hideError(); setLoading(true);
+    try { page.reload(); } catch {}
+  }
+  if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); backBtn.click(); }
+  if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); forwardBtn.click(); }
+  if (e.key === 'Escape') {
+    try { page.stop(); } catch {}
+    setLoading(false); statusText.textContent = 'Stopped.';
+  }
+});
+
+// ─── Initial state ────────────────────────────────────────────────────────
+backBtn.disabled    = true;
+forwardBtn.disabled = true;
+lockIcon.textContent = '🔍';
+lockIcon.className   = '';
+</script>
+</body>
+</html>

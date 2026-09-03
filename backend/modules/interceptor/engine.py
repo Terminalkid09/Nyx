@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from core.events.bus import EventBus
 from core.storage.models import InterceptorRule, InterceptedItem
+from core.utils.text import safe_decode
 from core.storage.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ class InterceptorEngine:
         """Initialise the interceptor with event bus and proxy engine reference."""
         self.event_bus = event_bus
         self.proxy_engine = proxy_engine
-        self.enabled = True
+        self.enabled = False
         self._lock = threading.Lock()
         self._paused_flows: dict[str, http.HTTPFlow] = {}
         self.paused_items: dict[str, dict] = {}
@@ -59,14 +60,30 @@ class InterceptorEngine:
                     flow.intercept()
                     flow.metadata["intercepted"] = True
 
+                    snapshot = {
+                        "method": flow.request.method,
+                        "url": flow.request.pretty_url,
+                        "headers": dict(flow.request.headers),
+                        "body": self._safe_decode(flow.request.content),
+                        "host": flow.request.pretty_host,
+                        "path": flow.request.path,
+                        "http_version": flow.request.http_version,
+                    }
+                    if direction == "response":
+                        if flow.response is not None:
+                            snapshot["status_code"] = flow.response.status_code
+                            snapshot["reason"] = flow.response.reason
+                            snapshot["response_headers"] = dict(flow.response.headers)
+                            snapshot["response_body"] = self._safe_decode(flow.response.content)
+                        else:
+                            snapshot["status_code"] = None
+
                     item_info = {
                         "id": item_id,
                         "direction": direction,
                         "status": "paused",
-                        "method": flow.request.method,
-                        "url": flow.request.pretty_url,
-                        "headers": dict(flow.request.headers),
                         "created_at": datetime.now(timezone.utc).isoformat(),
+                        **snapshot,
                     }
                     with self._lock:
                         self._paused_flows[item_id] = flow
@@ -112,8 +129,42 @@ class InterceptorEngine:
                 if r["enabled"] and r["scope"] in (direction, "both")
             ]
 
+    async def ensure_default_rules(self):
+        """Create default catch-all rules if no interceptor rules exist."""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(InterceptorRule).limit(1))
+            if result.scalar_one_or_none() is not None:
+                return
+            defaults = [
+                InterceptorRule(
+                    name="Intercept all requests",
+                    scope="request",
+                    intercept_on_match=True,
+                    match_type="url",
+                    match_pattern=".*",
+                    is_regex=True,
+                    enabled=True,
+                    order=0,
+                ),
+                InterceptorRule(
+                    name="Intercept all responses",
+                    scope="response",
+                    intercept_on_match=True,
+                    match_type="url",
+                    match_pattern=".*",
+                    is_regex=True,
+                    enabled=False,
+                    order=1,
+                ),
+            ]
+            for rule in defaults:
+                db.add(rule)
+            await db.commit()
+            logger.info("Created %d default interceptor rules", len(defaults))
+
     async def refresh_rules_cache(self):
         """Reload interception rules from the database into memory."""
+        await self.ensure_default_rules()
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(InterceptorRule).order_by(InterceptorRule.order)
@@ -175,12 +226,7 @@ class InterceptorEngine:
 
     def _safe_decode(self, content: bytes | None) -> str | None:
         """Decode bytes to UTF-8, falling back to hex on failure."""
-        if not content:
-            return None
-        try:
-            return content.decode("utf-8", errors="replace")
-        except Exception:
-            return content.hex()
+        return safe_decode(content, hex_limit=None)
 
     def clear_paused_flows(self):
         """Kill all paused flows and clear internal state (called before proxy stop/switch)."""

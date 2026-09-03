@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import Counter
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,13 @@ class ReporterService:
         template_dir = Path(__file__).parent / "templates"
         self.reports_dir = Path(__file__).parent.parent / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.env = Environment(loader=FileSystemLoader(str(template_dir)))
+        self.env = Environment(
+            loader=FileSystemLoader(str(template_dir)),
+            # Auto-escape HTML templates so attacker-controlled finding content
+            # (evidence bodies, headers, titles) can't inject markup or scripts
+            # into generated reports. Markdown keeps raw text for formatting.
+            autoescape=select_autoescape(enabled_extensions=("html", "htm", "xml")),
+        )
 
     async def generate(
         self,
@@ -66,24 +72,33 @@ class ReporterService:
 
     async def generate_from_db(
         self,
-        session_id: str | None = None,
+        session_id: str,
         format: str = "json",
     ) -> bytes:
+        """Generate a report for one concrete ``session_id``.
+
+        The session is required: omitting it used to silently aggregate
+        findings across every session, mixing unrelated scopes. Callers must
+        pass an explicit session (or intentionally decide on an aggregate
+        report elsewhere).
+        """
+        if not session_id:
+            raise ValueError("session_id is required to generate a report — pass a concrete session UUID")
+        try:
+            session_uuid = uuid.UUID(str(session_id))
+        except (ValueError, AttributeError):
+            raise ValueError(f"Invalid session_id: {session_id!r}")
         from core.storage.database import AsyncSessionLocal
         from core.storage.models import Finding, Request
         from sqlalchemy import select, func
 
         async with AsyncSessionLocal() as db:
-            findings_query = select(Finding)
-            if session_id:
-                findings_query = findings_query.where(Finding.session_id == session_id)
+            findings_query = select(Finding).where(Finding.session_id == session_uuid)
             findings_query = findings_query.order_by(Finding.severity.desc())
             result = await db.execute(findings_query)
             findings = list(result.scalars().all())
 
-            count_query = select(func.count(Request.id))
-            if session_id:
-                count_query = count_query.where(Request.session_id == session_id)
+            count_query = select(func.count(Request.id)).where(Request.session_id == session_uuid)
             req_result = await db.execute(count_query)
             request_count = req_result.scalar() or 0
 
@@ -96,6 +111,7 @@ class ReporterService:
                 "remediation": f.remediation,
                 "cwe": f.cwe,
                 "cvss_score": f.cvss_score,
+                "cvss_vector": f.cvss_vector,
                 "module": f.module,
                 "id": str(f.id),
                 "created_at": f.created_at.isoformat() if f.created_at else None,
@@ -103,7 +119,7 @@ class ReporterService:
             for f in findings
         ]
 
-        report_session_id = uuid.UUID(session_id) if session_id else uuid.uuid4()
+        report_session_id = session_uuid
         return await self.generate(
             session_id=report_session_id,
             findings=findings_dicts,
@@ -111,7 +127,7 @@ class ReporterService:
             format=format,
         )
 
-    async def save_report(self, session_id: str | None = None, scan_name: str = "Nyx Scan Report") -> dict:
+    async def save_report(self, session_id: str, scan_name: str = "Nyx Scan Report") -> dict:
         json_bytes = await self.generate_from_db(session_id=session_id, format="json")
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"report_{timestamp}.json"

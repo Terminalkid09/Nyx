@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { apiClient } from '../../api/client'
 import { Activity, Play, Square, BarChart, Zap, AlertTriangle } from 'lucide-react'
 
@@ -34,6 +35,9 @@ interface Session {
 }
 
 export function Sequencer() {
+  const location = useLocation()
+  const navState = (location.state || {}) as Record<string, any>
+  const prefillSessionId = navState.request_session_id || navState.session_id || ''
   const [activeTab, setActiveTab] = useState<Tab>('manual')
   const [error, setError] = useState('')
 
@@ -42,7 +46,7 @@ export function Sequencer() {
   const [analyzing, setAnalyzing] = useState(false)
 
   const [sessions, setSessions] = useState<Session[]>([])
-  const [selectedSession, setSelectedSession] = useState('')
+  const [selectedSession, setSelectedSession] = useState(prefillSessionId)
   const [isCapturing, setIsCapturing] = useState(false)
   const [liveTokens, setLiveTokens] = useState<string[]>([])
   const [liveCount, setLiveCount] = useState(0)
@@ -53,7 +57,27 @@ export function Sequencer() {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Resume capture after a tab switch: the backend capture keeps running, so
+  // re-check its status once a session is known and re-attach the polling.
+  useEffect(() => {
+    if (!selectedSession) return
+    apiClient
+      .get(`/api/sequencer/live/capturing/${selectedSession}`)
+      .then(({ data }) => {
+        if (data?.is_capturing) {
+          setIsCapturing(true)
+          fetchLiveTokens()
+          if (!pollRef.current) {
+            pollRef.current = setInterval(fetchLiveTokens, 2000)
+          }
+        }
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSession])
 
   const fetchSessions = async () => {
     try {

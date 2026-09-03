@@ -24,16 +24,29 @@ func New(webhookURL string) *Notifier {
 	}
 }
 
-func (n *Notifier) Send(token string, eventType string, payload interface{}) {
+func (n *Notifier) InteractionReceived(token string, interaction storage.Interaction) {
 	if n.url == "" {
 		return
 	}
 
 	body := map[string]interface{}{
-		"token":      token,
-		"event_type": eventType,
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
-		"payload":    payload,
+		"token":     token,
+		"type":      string(interaction.Type),
+		"source_ip": interaction.RemoteAddr,
+	}
+
+	switch interaction.Type {
+	case storage.InteractionDNS:
+		body["raw"] = interaction.QueryType + " " + interaction.QueryName
+	case storage.InteractionHTTP, storage.InteractionHTTPS:
+		raw := interaction.Method + " " + interaction.URL
+		if interaction.UserAgent != "" {
+			raw += "\nUser-Agent: " + interaction.UserAgent
+		}
+		if interaction.Body != "" {
+			raw += "\n\n" + interaction.Body
+		}
+		body["raw"] = raw
 	}
 
 	data, err := json.Marshal(body)
@@ -53,8 +66,4 @@ func (n *Notifier) Send(token string, eventType string, payload interface{}) {
 			log.Printf("[webhook] unexpected status: %d", resp.StatusCode)
 		}
 	}()
-}
-
-func (n *Notifier) InteractionReceived(token string, interaction storage.Interaction) {
-	n.Send(token, "interaction.received", interaction)
 }

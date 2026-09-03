@@ -1,30 +1,27 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { apiClient } from '../../api/client'
-import { NyxSession } from '../../types'
+import { useSessionStore } from '../../store/useSessionStore'
 
 export function Reporter() {
-  const [sessions, setSessions] = useState<NyxSession[]>([])
-  const [selectedSession, setSelectedSession] = useState('')
+  const { sessions, activeSessionId } = useSessionStore()
+  const [selectedSession, setSelectedSession] = useState(activeSessionId || '')
   const [format, setFormat] = useState('html')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    apiClient.get('/api/sessions').then(({ data }) => setSessions(data)).catch(() => {})
-  }, [])
 
   const generateReport = async () => {
     if (!selectedSession) return
     setLoading(true)
     setError('')
     try {
-      const { data, headers } = await apiClient.get('/api/reports/generate', {
+      const { data } = await apiClient.post('/api/reports/generate', null, {
         params: { session_id: selectedSession, format },
         responseType: format === 'pdf' ? 'blob' : 'text',
       })
 
       const ext = format === 'pdf' ? 'pdf' : format
-      const blob = format === 'pdf' ? data : new Blob([data], { type: 'text/html' })
+      const mime = format === 'json' ? 'application/json' : format === 'md' ? 'text/markdown' : 'text/html'
+      const blob = format === 'pdf' ? data : new Blob([data], { type: mime })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -59,7 +56,7 @@ export function Reporter() {
         <div>
           <label className="text-xs text-gray-500 block mb-1">Format</label>
           <div className="flex gap-2">
-            {['html', 'pdf', 'json'].map((f) => (
+            {['html', 'pdf', 'json', 'md'].map((f) => (
               <button
                 key={f}
                 onClick={() => setFormat(f)}

@@ -22,21 +22,20 @@ class ActiveCspBypassCheck(BaseCheck):
                     modified = dict(base_request)
                     parsed = urlparse(modified["url"])
                     params = dict(parse_qsl(parsed.query))
-                    if param in params:
-                        params[param] = payload
-                        modified["url"] = parsed._replace(query=urlencode(params)).geturl()
-                        try:
-                            resp = await client.request(**modified)
-                            if payload in resp.text and "text/html" in resp.headers.get("content-type", ""):
-                                results.append(CheckResult(
-                                    triggered=True,
-                                    severity="medium",
-                                    title=f"CSP Bypass via {bypass_name}",
-                                    description=f"Parameter '{param}' may allow CSP bypass.",
-                                    evidence=f"Payload: {payload}",
-                                    remediation="Review CSP policy. Avoid using unsafe-inline, unsafe-eval. Implement strict-dynamic.",
-                                    cwe="CWE-1021",
-                                ))
-                        except Exception:
-                            continue
+                    params[param] = payload
+                    modified["url"] = parsed._replace(query=urlencode(params)).geturl()
+                    try:
+                        resp = await client.request(**modified)
+                        if payload in resp.text and "text/html" in resp.headers.get("content-type", ""):
+                            results.append(CheckResult(
+                                triggered=True,
+                                severity="medium",
+                                title=f"CSP Bypass via {bypass_name}",
+                                description=f"Parameter '{param}' may allow CSP bypass.",
+                                evidence=f"Payload: {payload}",
+                                remediation="Review CSP policy. Avoid using unsafe-inline, unsafe-eval. Implement strict-dynamic.",
+                                cwe="CWE-1021",
+                            ))
+                    except Exception:
+                        continue
         return results

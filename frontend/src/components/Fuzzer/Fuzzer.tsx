@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useProxyStore } from '../../store/useProxyStore'
 import { useSessionStore } from '../../store/useSessionStore'
 import {
@@ -31,13 +32,20 @@ interface Extractor {
   group: number
 }
 
+import { useFuzzerStore } from '../../store/useFuzzerStore'
+import { useJobsStore } from '../../store/useJobsStore'
+import { ProxyRequestPicker } from '../ProxyRequestPicker/ProxyRequestPicker'
+
 const DEFAULT_SESSION_ID = '00000000-0000-0000-0000-000000000001'
 
 export function Fuzzer() {
   const requests = useProxyStore((s) => s.requests)
   const { activeSessionId } = useSessionStore()
-  const [selectedReqId, setSelectedReqId] = useState('')
-  const [template, setTemplate] = useState('')
+  const { selectedReqId, template, setFuzzerTarget } = useFuzzerStore()
+  const { jobs: storedJobs, setJob: storeJob, clearJob: clearStoredJob } = useJobsStore()
+  const location = useLocation()
+  const navState = (location.state || {}) as Record<string, any>
+  
   const [attackType, setAttackType] = useState('sniper')
   const [rateLimit, setRateLimit] = useState(10)
   const [positions, setPositions] = useState<PositionConfig[]>([])
@@ -59,6 +67,35 @@ export function Fuzzer() {
     fetchWordlists().then(setWordlists).catch(() => {})
     fetchAttackTypes().then(setAttackTypes).catch(() => {})
     fetchProcessors().then(setProcessorList).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!navState.url) return
+    const baseReq = requests.find((r) => r.id === navState.request_id)
+    if (baseReq) {
+      const body = baseReq.request_body ? `\r\n${baseReq.request_body}` : ''
+      setFuzzerTarget(baseReq.id, `${baseReq.method} ${baseReq.path} HTTP/1.1\r\nHost: ${baseReq.host}\r\n${body}`)
+      return
+    }
+    let host = navState.host || ''
+    let path = navState.path || ''
+    try {
+      const u = new URL(navState.url)
+      if (!host) host = u.host
+      if (!path) path = u.pathname + u.search
+    } catch {}
+    // Headers arrive either as an object ({Name: value}) or as pre-formatted
+    // text lines ("Name: value\n...") depending on the caller (Triage sends the
+    // latter). Handle both instead of silently dropping string headers.
+    let headerLines: string = ''
+    if (navState.headers && typeof navState.headers === 'string') {
+      headerLines = navState.headers
+    } else if (navState.headers && typeof navState.headers === 'object') {
+      headerLines = Object.entries(navState.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')
+    }
+    const hdrs = headerLines ? headerLines.replace(/\r?\n/g, '\r\n') + '\r\n' : ''
+    const template = `${navState.method || 'GET'} ${path} HTTP/1.1\r\nHost: ${host}\r\n${hdrs}\r\n${navState.body || ''}`
+    setFuzzerTarget(navState.request_id || '', template)
   }, [])
 
   const extractPositionsFromTemplate = useCallback((tmpl: string): string[] => {
@@ -107,11 +144,12 @@ export function Fuzzer() {
     return () => clearTimeout(timer)
   }, [template, attackType, positions])
 
-  const loadRequest = () => {
-    const req = requests.find((r) => r.id === selectedReqId)
+  const loadRequest = (id?: string) => {
+    const targetId = id || selectedReqId
+    const req = requests.find((r) => r.id === targetId)
     if (!req) return
     const body = req.request_body ? `\r\n${req.request_body}` : ''
-    setTemplate(`${req.method} ${req.path} HTTP/1.1\r\nHost: ${req.host}\r\n${body}`)
+    setFuzzerTarget(targetId, `${req.method} ${req.path} HTTP/1.1\r\nHost: ${req.host}\r\n${body}`)
   }
 
   const insertMarker = () => {
@@ -124,7 +162,7 @@ export function Fuzzer() {
     const before = template.substring(0, start)
     const after = template.substring(end)
     const newTemplate = `${before}§${markerName}§${after}`
-    setTemplate(newTemplate)
+    setFuzzerTarget(selectedReqId, newTemplate)
     setTimeout(() => {
       ta.focus()
       const cursorPos = start + markerName.length + 2
@@ -139,8 +177,12 @@ export function Fuzzer() {
     setResults([])
     setJobStatus('pending')
     try {
+      // Prefer the session of the triaged request when the Fuzzer was opened
+      // from Triage, so findings land in the same session scope the request
+      // belongs to instead of whichever session happens to be active.
+      const sessionId = navState.request_session_id || activeSessionId || DEFAULT_SESSION_ID
       const job = await createFuzzJob({
-        session_id: activeSessionId || DEFAULT_SESSION_ID,
+        session_id: sessionId,
         base_request_id: selectedReqId,
         request_template: template,
         attack_type: attackType,
@@ -155,6 +197,7 @@ export function Fuzzer() {
       })
       setJobId(job.id)
       setJobStatus(job.status)
+      storeJob('fuzzer', job.id, job.status)
       pollResults(job.id)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message)
@@ -174,6 +217,7 @@ export function Fuzzer() {
         if (job.status === 'done' || job.status === 'cancelled') {
           if (pollRef.current) clearInterval(pollRef.current)
           setLoading(false)
+          clearStoredJob('fuzzer')
         }
       } catch {
         if (pollRef.current) clearInterval(pollRef.current)
@@ -182,12 +226,37 @@ export function Fuzzer() {
     }, 1000)
   }
 
+  // Resume a still-running job after a tab switch: the backend job survives
+  // the unmount, so re-attach to it and keep polling instead of losing it.
+  useEffect(() => {
+    const saved = storedJobs.fuzzer
+    if (saved && saved.id) {
+      setJobId(saved.id)
+      setJobStatus(saved.status || 'running')
+      setLoading(true)
+      getFuzzJob(saved.id)
+        .then((job) => {
+          setJobStatus(job.status)
+          if (job.results && job.results.length > 0) setResults(job.results)
+          if (job.status === 'done' || job.status === 'cancelled') {
+            clearStoredJob('fuzzer')
+          } else {
+            pollResults(saved.id)
+          }
+        })
+        .catch(() => clearStoredJob('fuzzer'))
+        .finally(() => setLoading(false))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const cancel = async () => {
     if (!jobId) return
     try {
       await cancelFuzzJob(jobId)
       setJobStatus('cancelled')
       if (pollRef.current) clearInterval(pollRef.current)
+      clearStoredJob('fuzzer')
       setLoading(false)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message)
@@ -271,20 +340,18 @@ export function Fuzzer() {
         <div className="flex gap-2 items-start">
           <div className="flex-1">
             <label className="text-xs text-gray-500 block mb-1">Request</label>
-            <select
-              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+            <ProxyRequestPicker
               value={selectedReqId}
-              onChange={(e) => setSelectedReqId(e.target.value)}
-            >
-              <option value="">Select a proxied request...</option>
-              {requests.slice(0, 100).map((r) => (
-                <option key={r.id} value={r.id}>{r.method} {r.path}</option>
-              ))}
-            </select>
+              onChange={(req) => {
+                if (!req) return
+                setFuzzerTarget(req.id, template)
+                loadRequest(req.id)
+              }}
+            />
           </div>
           <button
             className="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs text-gray-300 mt-5"
-            onClick={loadRequest}
+            onClick={() => loadRequest()}
           >
             Load
           </button>
@@ -305,11 +372,11 @@ export function Fuzzer() {
               ref={textareaRef}
               className="w-full h-36 bg-gray-900 border border-gray-800 rounded p-2 text-xs font-mono text-transparent caret-gray-200 resize-none absolute inset-0 z-10"
               value={template}
-              onChange={(e) => setTemplate(e.target.value)}
+              onChange={(e) => setFuzzerTarget(selectedReqId, e.target.value)}
               spellCheck={false}
             />
             <div
-              className="w-full h-36 bg-gray-900 border border-gray-800 rounded p-2 text-xs font-mono whitespace-pre-wrap break-all overflow-auto pointer-events-none"
+              className="w-full h-36 bg-gray-900 border border-gray-800 rounded p-2 text-xs font-mono whitespace-pre-wrap break-all overflow-auto pointer-events-none text-gray-200"
               dangerouslySetInnerHTML={{ __html: highlightedTemplate + ' ' }}
             />
           </div>
@@ -383,7 +450,7 @@ export function Fuzzer() {
                           {wordlists.length === 0 && <option value="">No built-in wordlists found</option>}
                           {wordlists.map((wl) => (
                             // wl is an absolute path; show only the basename for readability
-                            <option key={wl} value={wl}>{wl.split(/[\/\\]/).pop()}</option>
+                            <option key={wl} value={wl}>{wl.split(/[\\\\/]/).pop()}</option>
                           ))}
                         </select>
                         <input

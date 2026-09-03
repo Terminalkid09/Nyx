@@ -36,6 +36,7 @@ async def generate_report(
             "cwe": f.cwe,
             "module": f.module,
             "cvss_score": f.cvss_score,
+            "cvss_vector": f.cvss_vector,
         }
         for f in findings
     ]

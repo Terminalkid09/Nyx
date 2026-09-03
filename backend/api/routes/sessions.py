@@ -4,7 +4,7 @@ from api.deps import get_db
 from api.schemas.sessions import SessionCreate, SessionUpdate, SessionResponse
 from core.storage.crud.sessions import (
     create_session, get_session, list_sessions,
-    update_session, delete_session,
+    update_session, delete_session, reset_session_data,
 )
 import uuid
 
@@ -41,4 +41,12 @@ async def update_session_by_id(session_id: uuid.UUID, body: SessionUpdate, db: A
 async def delete_session_by_id(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     deleted = await delete_session(db, session_id)
     if not deleted:
+        raise HTTPException(404, detail="Session not found")
+
+
+@router.delete("/{session_id}/data", status_code=204)
+async def reset_session_data_by_id(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Wipe all findings, requests and scan data for a session, keeping the session itself."""
+    reset = await reset_session_data(db, session_id)
+    if not reset:
         raise HTTPException(404, detail="Session not found")

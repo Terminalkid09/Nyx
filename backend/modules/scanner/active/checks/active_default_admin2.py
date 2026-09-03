@@ -21,7 +21,7 @@ class ActiveDefaultAdmin2Check(BaseCheck):
                             triggered=True,
                             severity="high",
                             title="Default Admin Credentials (admin:password)",
-                            description=f"Admin panel at {path} accepts default {user}:password credentials, allowing unauthorized access.",
+                            description=f"Admin panel at {path} accepts default admin:password credentials, allowing unauthorized access.",
                             evidence=f"Path: {path}\nCredentials: admin:password",
                             remediation="Change all default credentials immediately. Enforce strong password policies. Disable default accounts.",
                             cwe="CWE-798",

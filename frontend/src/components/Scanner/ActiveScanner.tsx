@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams, useLocation } from 'react-router-dom'
 import { apiClient } from '../../api/client'
 import { useProxyStore } from '../../store/useProxyStore'
+import { ProxyRequestPicker } from '../ProxyRequestPicker/ProxyRequestPicker'
 
 const CHECKS = [
   { id: 'sqli', label: 'SQL Injection', severity: 'high' },
@@ -15,11 +17,38 @@ const CHECKS = [
 
 export function ActiveScanner() {
   const requests = useProxyStore((s) => s.requests)
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  const navState = (location.state || {}) as Record<string, any>
+  const queryUrl = searchParams.get('url') || navState.url || ''
+
   const [selectedReqId, setSelectedReqId] = useState('')
+  const [customUrl, setCustomUrl] = useState(queryUrl)
+  const [customMethod, setCustomMethod] = useState(navState.method || 'GET')
+  const [customHeaders, setCustomHeaders] = useState<string>(
+    typeof navState.headers === 'string'
+      ? navState.headers
+      : Object.entries(navState.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+  )
+  const [customBody, setCustomBody] = useState(navState.body || '')
+  const [useCustomUrl, setUseCustomUrl] = useState(!!queryUrl || !!navState.url)
   const [selectedChecks, setSelectedChecks] = useState<string[]>([])
   const [results, setResults] = useState<any[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (customUrl && !selectedReqId) {
+      const found = (requests || []).find(r => r.url?.includes(customUrl))
+      if (found) setSelectedReqId(found.id)
+    }
+  }, [customUrl, requests, selectedReqId])
+
+  useEffect(() => {
+    if (navState.cwe && navState.cwe.includes('89')) {
+      setSelectedChecks(prev => prev.includes('sqli') ? prev : [...prev, 'sqli'])
+    }
+  }, [navState.cwe])
 
   const toggleCheck = (id: string) => {
     setSelectedChecks((prev) =>
@@ -37,21 +66,51 @@ export function ActiveScanner() {
   }
 
   const runScan = async () => {
-    const req = requests.find((r) => r.id === selectedReqId)
-    if (!req || selectedChecks.length === 0) return
+    let scanUrl: string
+    let scanMethod: string
+    let scanHeaders: Record<string, string>
+    let scanBody: string
+
+    if (useCustomUrl) {
+      if (!customUrl) { setError('Enter a target URL'); return }
+      scanUrl = customUrl
+      scanMethod = customMethod || 'GET'
+      scanHeaders = {}
+      const seen = new Set<string>()
+      customHeaders.split('\n').forEach((line) => {
+        const idx = line.indexOf(':')
+        if (idx > 0) {
+          const k = line.slice(0, idx).trim()
+          const v = line.slice(idx + 1).trim()
+          if (k && !seen.has(k.toLowerCase())) { seen.add(k.toLowerCase()); scanHeaders[k] = v }
+        }
+      })
+      scanBody = customBody
+    } else {
+      const req = requests.find((r) => r.id === selectedReqId)
+      if (!req) {
+        setError('Selected request not found. It may have been removed from the log.')
+        return
+      }
+      scanUrl = req.url
+      scanMethod = req.method
+      scanHeaders = req.request_headers || {}
+      scanBody = req.request_body || ''
+    }
+    if (selectedChecks.length === 0) return
 
     setLoading(true)
     setError('')
     setResults(null)
 
-    const params = extractParams(req.url)
+    const params = extractParams(scanUrl)
     try {
       const { data } = await apiClient.post('/api/active-scanner/run', {
         base_request: {
-          method: req.method,
-          url: req.url,
-          headers: req.request_headers,
-          body: req.request_body,
+          method: scanMethod,
+          url: scanUrl,
+          headers: scanHeaders,
+          body: scanBody,
         },
         target_params: params.length > 0 ? params : [''],
         checks: selectedChecks,
@@ -70,21 +129,62 @@ export function ActiveScanner() {
         Active Scanner
       </div>
       <div className="flex-1 p-4 space-y-4 overflow-auto">
-        <div>
-          <label className="text-xs text-gray-500 block mb-1">Select Request</label>
-          <select
-            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
-            value={selectedReqId}
-            onChange={(e) => setSelectedReqId(e.target.value)}
-          >
-            <option value="">— choose a request from Proxy —</option>
-            {(requests || []).slice(0, 100).map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.method} {r.host}{r.path}
-              </option>
-            ))}
-          </select>
+        <div className="flex items-center gap-2 mb-2">
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+            <input type="checkbox" checked={useCustomUrl} onChange={() => setUseCustomUrl(!useCustomUrl)} className="accent-purple-500" />
+            Custom URL
+          </label>
         </div>
+        {useCustomUrl ? (
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Target URL</label>
+              <input
+                className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono"
+                value={customUrl}
+                onChange={(e) => setCustomUrl(e.target.value)}
+                placeholder="https://example.com/page?param=value"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Method</label>
+                <input
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono"
+                  value={customMethod}
+                  onChange={(e) => setCustomMethod(e.target.value)}
+                  placeholder="GET"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Body</label>
+                <input
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono"
+                  value={customBody}
+                  onChange={(e) => setCustomBody(e.target.value)}
+                  placeholder="request body"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Headers</label>
+              <textarea
+                className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono h-16"
+                value={customHeaders}
+                onChange={(e) => setCustomHeaders(e.target.value)}
+                placeholder={'Host: example.com\r\nCookie: x=y'}
+              />
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Select Request</label>
+            <ProxyRequestPicker
+              value={selectedReqId}
+              onChange={(req) => req && setSelectedReqId(req.id)}
+            />
+          </div>
+        )}
 
         <div>
           <label className="text-xs text-gray-500 block mb-1">Checks</label>
