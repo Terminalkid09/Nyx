@@ -20,6 +20,7 @@ import { useSessionStore } from '../../store/useSessionStore'
 import { DeployBox } from './DeployBox'
 import { DhcpStatusPanel } from './DhcpStatusPanel'
 import { ActivityMonitor } from './ActivityMonitor'
+import { TargetPackets } from './TargetPackets'
 import { TrafficDiagnosticsPanel } from './TrafficDiagnosticsPanel'
 import {
   Shield,
@@ -702,6 +703,9 @@ export function MitmPage() {
 
             {/* Live per-target activity (SNI + HTTP, works without the CA) */}
             <ActivityMonitor activity={status?.activity ?? []} />
+
+            {/* Live target-scoped packet feed (network layer, auto start/stop) */}
+            <TargetPackets feed={status?.packet_feed} />
           </div>
         )}
 

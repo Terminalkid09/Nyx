@@ -34,6 +34,32 @@ export interface MitmStatus {
   quic_mode?: 'drop' | 'allow'
   udp_policy?: UdpPolicy
   activity?: Array<{ ip: string; host: string; count: number; last_seen: string }>
+  // Target-scoped packet feed (auto start/stop with the session)
+  packet_feed?: PacketFeedStatus
+}
+
+export interface PacketFeedStatus {
+  running: boolean
+  interface: string | null
+  targets: string[]
+  packets_buffered: number
+  error: string | null
+  started_ts: number | null
+}
+
+/** One packet summary from GET /api/mitm/packets (same shape as the
+ *  Network tab's packet list — src/dst/proto/ports, no payload). */
+export interface MitmPacket {
+  seq: number
+  timestamp: string
+  length: number
+  proto: 'tcp' | 'udp' | 'icmp' | 'arp' | 'ip' | 'other'
+  src?: string
+  dst?: string
+  sport?: number
+  dport?: number
+  eth_src?: string
+  eth_dst?: string
 }
 
 export interface UdpRule {
@@ -128,6 +154,11 @@ export async function scanNetwork(): Promise<NetworkDevice[]> {
 
 export async function getCaCertUrl(): Promise<string> {
   return '/api/ca-certificate'
+}
+
+export async function getMitmPackets(limit = 120): Promise<MitmPacket[]> {
+  const { data } = await apiClient.get('/api/mitm/packets', { params: { limit } })
+  return Array.isArray(data) ? data : []
 }
 
 export async function removeCaFromHost(): Promise<{ status: string; message: string }> {

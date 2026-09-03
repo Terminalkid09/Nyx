@@ -869,6 +869,12 @@ async def _mitm_start_locked(req: MITMStartRequest):
     # was intercepted since the start (the MITM session accumulates forever).
     _mitm_session_started_ts = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    # Target-scoped packet feed (MITM page "Packets" view). Auto-started with
+    # the session, auto-stopped with it; failure here NEVER fails the MITM —
+    # the feed is a passive view and its status carries the error instead.
+    from modules.network.mitm_feed import start_feed
+    await start_feed(set(req.target_ips), gateway_ip=req.gateway_ip)
+
     return MITMStartResponse(
         status="ok",
         message=(
@@ -939,6 +945,14 @@ async def mitm_stop():
         # forwarding stays on) until Nyx is fully closed.
         stop_transparent_transport()
         _engine.transport_ready = False
+
+    # Stop the target-scoped packet feed started by mitm_start (keeps the
+    # UI's packet view lifecycle in lockstep with the interception session).
+    from modules.network.mitm_feed import stop_feed
+    try:
+        await stop_feed()
+    except Exception as e:
+        logger.warning("MITM packet feed stop failed: %s", e)
 
     # NOTE: the Windows Firewall rule for the proxy port is intentionally NOT
     # removed here. It stays open for the whole backend lifetime so devices
@@ -1170,11 +1184,34 @@ async def mitm_status():
         # trust the CA via DeployBox); False = HTTPS tunnelled untouched, only
         # plain HTTP is intercepted. Toggle via POST /api/mitm/tls.
         "tls_mitm": _engine.tls_mitm if _engine else True,
+        # Target-scoped packet feed (started/stopped with the session).
+        # Wrapped: the feed module may not exist in stripped builds.
+        "packet_feed": _packet_feed_status(),
     }
+
+
+def _packet_feed_status() -> dict:
+    """Feed status for the /status payload — never raises."""
+    try:
+        from modules.network.mitm_feed import feed_status
+        return feed_status()
+    except Exception:
+        return {"running": False, "interface": None, "targets": [], "packets_buffered": 0, "error": None, "started_ts": None}
 
 
 class TLSSetting(BaseModel):
     active: bool
+
+
+@router.get("/packets")
+async def mitm_packets(limit: int = 120):
+    """Recent packets scoped to the intercepted targets (feed's BPF already
+    restricts capture to target endpoints + DHCP handshake frames)."""
+    try:
+        from modules.network.mitm_feed import recent_packets
+        return recent_packets(limit)
+    except Exception:
+        return []
 
 
 @router.post("/tls")
