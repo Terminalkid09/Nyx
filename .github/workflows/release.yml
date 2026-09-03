@@ -120,7 +120,11 @@ jobs:
 
       - name: Build installer
         working-directory: desktop
-        run: npm run dist ${{ matrix.target }}
+        # Publish explicitly DISABLED: electron-builder must only BUILD here.
+        # Its own GitHub publishing + the softprops upload step would each
+        # attach the installers, duplicating assets under different names
+        # (and latest.yml's sha512 then pointed at a stale asset).
+        run: npm run dist -- ${{ matrix.target }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # NOTE: do NOT pass CSC_LINK/APPLE_* secrets here. When unset they
@@ -135,5 +139,8 @@ jobs:
         with:
           files: |
             ${{ matrix.asset_pattern }}
+          # Re-running the release (re-tag) must REPLACE assets, not pile up
+          # duplicates — GitHub renames on same-name conflict otherwise.
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

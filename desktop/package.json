@@ -71,11 +71,11 @@
                                            ],
                                 "icon":  "icon.png",
                                 "category":  "Development"
-                            },
-"nsis":  {
-                           "oneClick":  true,
-                           "perMachine":  false,
-                           "allowToChangeInstallationDirectory":  false,
+                            },    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "artifactName": "${productName}-Setup-${version}.${ext}",
                            "installerIcon":  "icon.ico",
                            "uninstallerIcon":  "icon.ico",
                            "createDesktopShortcut":  true,
