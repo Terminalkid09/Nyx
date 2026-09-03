@@ -198,7 +198,12 @@ class FuzzerService:
             return []
 
         p = Path(path)
-        if p.is_absolute() or os.path.isabs(path):
+        # Windows-style drive letters must be treated as absolute on every OS:
+        # on POSIX, Path("C:/Windows/win.ini").is_absolute() is False and it
+        # would fall through to the relative branch and raise. PurePath cannot
+        # parse foreign-platform syntax, so match the drive prefix explicitly.
+        _looks_abs = p.is_absolute() or os.path.isabs(path) or re.match(r"^[A-Za-z]:[/\\]", path)
+        if _looks_abs:
             # Absolute paths are only honored for the wordlist directories Nyx
             # itself exposes via list_wordlists() — reading arbitrary files
             # from anywhere on disk is not acceptable.

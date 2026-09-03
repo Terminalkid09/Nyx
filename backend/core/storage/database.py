@@ -109,10 +109,17 @@ async def run_alembic_migration():
             raise RuntimeError(f"Alembic failed: {stdout.decode()}")
     except Exception as e:
         logger.warning("Alembic migration failed (%s), falling back to create_all", e)
+    finally:
+        # Safety net, ALWAYS runs (create_all is idempotent: it only creates
+        # missing tables). This matters because the alembic subprocess uses
+        # backend/ as its cwd — if the app resolves its DB relative to a
+        # different cwd, alembic "succeeds" against the wrong file and the
+        # app's database would otherwise stay empty of tables (observed as
+        # "no such table: findings" on fresh setups).
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         await _apply_lightweight_migrations()
-        logger.info("create_all fallback completed")
+        logger.info("Database schema verified (create_all)")
 
 
 init_db = run_alembic_migration
