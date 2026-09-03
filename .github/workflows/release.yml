@@ -143,6 +143,15 @@ jobs:
         #   eb skips publishing; the upload step below is the only
         #   publisher.
         run: npm run dist -- ${{ matrix.target }} --publish never
+        env:
+          # electron-builder v26 still publishes on its own on TAG builds even
+          # with --publish never, whenever it can detect ANY token (observed in
+          # job logs: it uploaded a second asset). Force BOTH known token vars
+          # to empty strings -- step env overrides whatever the runner injects
+          # -- so its publish path is unreachable. The upload step below is
+          # the only publisher.
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
