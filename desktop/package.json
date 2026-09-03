@@ -94,8 +94,10 @@
                                       "repo":  "nyx"
                                   }
                               ]
-              },
-    "author":  "Nyx Developer",
+              },  "author": {
+    "name": "Nyx Developer",
+    "email": "Terminalkid09@users.noreply.github.com"
+  },
     "license":  "ISC",
     "devDependencies":  {
                             "electron":  "^43.1.1",
