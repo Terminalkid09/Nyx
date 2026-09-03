@@ -1,8 +1,8 @@
 {
     "name":  "nyx-desktop",
-    "version":  "1.0.0",
-    "description":  "Nyx — Security Testing Suite",
-    "main":  "main.js",
+    "version":  "1.0.0",  "description": "Nyx — Security Testing Suite",
+  "homepage": "https://github.com/Terminalkid09/Nyx",
+  "main": "main.js",
     "scripts":  {
                     "start":  "electron .",
                     "pack":  "electron-builder --dir",
