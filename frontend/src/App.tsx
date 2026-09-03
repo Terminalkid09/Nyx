@@ -61,6 +61,7 @@ const AuthScan = lazyNamed(() => import('./components/AuthScan/AuthScan'), 'Auth
 const CustomChecks = lazyNamed(() => import('./components/Scanner/CustomChecks'), 'CustomChecks')
 const Compliance = lazyNamed(() => import('./components/Compliance/Compliance'), 'Compliance')
 const Metrics = lazyNamed(() => import('./components/Metrics/Metrics'), 'Metrics')
+const Network = lazyNamed(() => import('./components/Network/Network'), 'Network')
 
 function RouteFallback() {
   return (
@@ -172,6 +173,7 @@ export default function App() {
                 <Route path="/mitm" element={<RouteErrorBoundary><MitmPage /></RouteErrorBoundary>} />
                 <Route path="/compliance" element={<RouteErrorBoundary><Compliance /></RouteErrorBoundary>} />
                 <Route path="/metrics" element={<RouteErrorBoundary><Metrics /></RouteErrorBoundary>} />
+                <Route path="/network" element={<RouteErrorBoundary><Network /></RouteErrorBoundary>} />
                 </Routes>
               </Suspense>
             </main>

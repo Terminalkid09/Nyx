@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Puzzle, Settings2, AlertTriangle, FileText, Webhook, Lightbulb } from 'lucide-react'
+import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Puzzle, Settings2, AlertTriangle, FileText, Webhook, Lightbulb, Network as NetworkIcon } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { SessionSwitcher } from './SessionSwitcher'
 
@@ -18,6 +18,7 @@ const navGroups = [
     name: 'TRAFFIC',
     items: [
       { to: '/proxy', label: 'Proxy', icon: Shield, badgeKey: null },
+      { to: '/network', label: 'Network', icon: NetworkIcon, badgeKey: null },
       { to: '/mitm', label: 'MITM', icon: Wifi, badgeKey: null },
       { to: '/interceptor', label: 'Interceptor', icon: PauseCircle, badgeKey: null },
       { to: '/repeater', label: 'Repeater', icon: Repeat, badgeKey: null },

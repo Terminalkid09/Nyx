@@ -41,6 +41,12 @@ event_bus = EventBus()
 proxy_engine = ProxyEngine(event_bus, host=settings.PROXY_HOST, port=settings.PROXY_PORT, mode=settings.PROXY_MODE)
 ws_manager: WebSocketManager | None = None
 _shutdown_event = threading.Event()
+# Defined at the top of the module: the lifespan, request_shutdown and the
+# atexit/signal handlers all reference it, and module-level functions resolve
+# globals at CALL time — but keeping the definition above every consumer
+# removes any ordering doubt (a handler invoked while the module is still
+# importing would otherwise NameError).
+_shutdown_started = threading.Event()
 
 _ca_portal = None
 
@@ -187,6 +193,55 @@ async def lifespan(app: FastAPI):
     app.state.recommender_engine = recommender_engine
     init_recommender(recommender_engine)
 
+    # ── Network layer (passive packet capture) ─────────────────────────
+    # Starts only when an interface is configured (NETWORK_IFACE). The sniffer
+    # is scapy-based (works on Windows/Linux/macOS); frames/stats are pushed
+    # to the UI via /api/network/ws/live.
+    from api.routes.network import init_network as _init_network_api
+    from api.routes.network import shutdown_network as _shutdown_network_api
+    network_task = None
+    if settings.NETWORK_IFACE:
+        from core.network.pcap import PCAPWriter
+        from modules.network.engine import NetworkEngine
+        _network_engine = NetworkEngine(
+            settings.NETWORK_IFACE,
+            settings.NETWORK_BPF_FILTER,
+            event_bus=event_bus,
+        )
+        if settings.NETWORK_PCAP_PATH:
+            _network_writer = PCAPWriter(settings.NETWORK_PCAP_PATH)
+            _network_writer.open()
+            _network_engine.set_pcap_output(_network_writer)
+        # Subscribe the live feed / event-bus publisher BEFORE starting the
+        # capture: frames emitted before any subscriber is registered are
+        # silently dropped, so starting the engine first would lose the very
+        # first frames (and the WebSocket live feed would never see them).
+        _init_network_api(event_bus, _network_engine)
+        try:
+            await _network_engine.start()
+            network_task = asyncio.create_task(_network_engine.run_async())
+            app.state.network_engine = _network_engine
+            logger.info("Network capture engine started on %s", settings.NETWORK_IFACE)
+
+            # Wire the stats aggregation task to the engine's live collector
+            from modules.network.tasks import StatsAggregationTask
+            _stats_task = StatsAggregationTask(
+                stats_collector=_network_engine.stats_collector,
+                output_dir="stats",
+            )
+            await _stats_task.start()
+            app.state.stats_task = _stats_task
+        except Exception as _net_err:
+            logger.warning("Network capture engine failed to start: %s", _net_err)
+            app.state.network_engine = None
+            try:
+                await _shutdown_network_api()
+            except Exception:
+                pass
+    else:
+        app.state.network_engine = None
+        _init_network_api(event_bus, None)
+
     # ── Audit trail ───────────────────────────────────────────────────
     from core.audit import start_audit_trail, log_audit
     start_audit_trail()
@@ -218,6 +273,23 @@ async def lifespan(app: FastAPI):
     await session_handling_engine.stop()
     await match_replace_engine.stop_refresh_task()
     interceptor_engine.clear_paused_flows()
+    # Stop the network capture engine + live feed.
+    if network_task is not None:
+        network_task.cancel()
+        try:
+            await network_task
+        except asyncio.CancelledError:
+            pass
+    # Stop the stats aggregation task
+    if hasattr(app.state, 'stats_task') and app.state.stats_task:
+        try:
+            await app.state.stats_task.stop()
+        except Exception:
+            pass
+    try:
+        await _shutdown_network_api()
+    except Exception as _net_err:
+        logger.warning("Network engine shutdown error: %s", _net_err)
     # Release MITM resources (firewall rules + any live spoofers/redirects)
     # only now — they must persist for manual-proxy (Stealth) devices for the
     # whole backend lifetime, not just until "Stop" is pressed.
@@ -249,7 +321,8 @@ app.state._start_time = _START_TIME
 #   1. POST /api/shutdown  → graceful path used by the Electron shell on quit
 #   2. signal handlers     → Ctrl+C / SIGTERM (console close)
 #   3. atexit              → normal interpreter exit
-_shutdown_started = threading.Event()
+# (_shutdown_started itself is defined at the top of the module, above every
+# consumer — see the note next to _shutdown_event.)
 
 
 def _emergency_cleanup() -> None:
@@ -473,6 +546,7 @@ from api.routes.auto_exploit import router as auto_exploit_router
 from api.routes.custom_scanner import router as custom_scanner_router
 from api.routes.recommendations import router as recommendations_router, init_recommender
 from api.routes.compliance import router as compliance_router
+from api.routes.network import router as network_router
 from core.recommender.engine import RecommendationEngine
 
 _env_frontend = os.environ.get("NYX_FRONTEND_DIST")
@@ -526,6 +600,7 @@ app.include_router(auto_exploit_router)
 app.include_router(custom_scanner_router)
 app.include_router(recommendations_router)
 app.include_router(compliance_router)
+app.include_router(network_router)
 
 from api.routes.backup import router as backup_router
 app.include_router(backup_router)

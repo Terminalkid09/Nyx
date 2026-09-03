@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # How many hours to keep intercepted requests (0 = unlimited).
     REQUEST_RETENTION_HOURS: int = 168  # 7 days
 
+    # Network layer (passive packet capture). NETWORK_IFACE empty means the
+    # capture engine is NOT auto-started at boot — start it via
+    # POST /api/network/capture/start instead.
+    NETWORK_IFACE: str = ""
+    # Includes arp/icmp: the packet-level decoders (ARP/ICMP) and the UI
+    # frame list advertise them, so a "tcp or udp"-only filter would silently
+    # never capture them by default.
+    NETWORK_BPF_FILTER: str = "tcp or udp or arp or icmp"
+    NETWORK_PCAP_PATH: str = ""
+
     model_config = {"env_file": str(Path(__file__).resolve().parent.parent.parent / ".env"), "extra": "ignore"}
 
     @property

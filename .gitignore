@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.egg-info/
 .venv/
+.venv*/
 venv/
 env/
 .env
@@ -51,6 +52,15 @@ data/
 *.bloom
 startup.log
 startup.err
+
+# Packet-capture runtime output (real traffic — never commit)
+*.pcap
+*.pcapng
+backend/captures/
+backend/stats/
+
+# Local dev scripts
+backend/live_feed.py
 
 # Reports
 backend/reports/
@@ -140,4 +150,7 @@ test_stderr.log
 
 # GitHub Actions
 !.github/
+
+# Freebuff client metadata
+.freebuff/
 

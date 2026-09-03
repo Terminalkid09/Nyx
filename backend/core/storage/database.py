@@ -95,7 +95,7 @@ async def run_alembic_migration():
     env.setdefault("PYTHONPATH", alembic_dir)
     try:
         proc = await asyncio.create_subprocess_exec(
-            "alembic", "upgrade", "head",
+            sys.executable, "-m", "alembic", "upgrade", "head",
             cwd=alembic_dir,
             env=env,
             stdout=asyncio.subprocess.PIPE,

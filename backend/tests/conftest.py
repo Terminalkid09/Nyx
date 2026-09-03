@@ -9,6 +9,21 @@ import asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """The API middleware rate-limits every /api/ request with a process-wide
+    token bucket keyed by client IP. Hundreds of API tests in one run drain it,
+    and any late test then receives 429s that have nothing to do with the code
+    under test (observed: test_webhook_valid_interaction failing only in the
+    full suite). Refill the bucket before every test so each starts full.
+    """
+    from core import api_auth
+
+    with api_auth._RATE_LIMIT_LOCK:
+        api_auth._RATE_LIMIT_BUCKETS.clear()
+    yield
+
+
 @pytest.fixture
 def event_bus():
     from core.events.bus import EventBus

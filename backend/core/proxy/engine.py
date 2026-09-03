@@ -399,27 +399,63 @@ def dhcp_block_clear():
     _DHCP_BLOCK_TARGETS.clear()
 
 
-# ── QUIC/HTTP3 blocking ──────────────────────────────────────────────────────
+# ── QUIC/HTTP3 handling ─────────────────────────────────────────────────────
 # Browsers and apps increasingly speak QUIC (UDP/443), which the transparent
-# TCP redirect never captures — traffic silently bypasses interception. The
-# fix is to DROP the target's UDP/443 packets: QUIC clients detect the dead
-# path and fall back to TCP/TLS, which IS intercepted. Only packets from the
-# current targets are dropped; the rest of the network is untouched.
+# TCP redirect never captures — traffic silently bypasses interception.
+#
+# Mode "drop" (default): DROP the target's UDP/443 packets. QUIC clients
+# detect the dead path and fall back to TCP/TLS, which IS intercepted. This
+# is the reliable choice — it works even when the target has NOT installed
+# the Nyx CA, because the fallback goes to classic TLS that the proxy
+# decrypts (or the target rejects with a warning the operator can accept).
+#
+# Mode "allow": leave QUIC alone — the target's QUIC flows reach the real
+# server untouched (no MITM on them — mitmproxy's Windows WinDivert
+# transport only redirects TCP, so we cannot deliver UDP/443 into the proxy;
+# full HTTP/3 interception would need a UDP redirect that simply doesn't
+# exist there yet). Use "allow" when forcing the TCP fallback breaks an
+# app, and rely on the passive network layer to at least SEE the flows.
 _QUIC_BLOCK_TARGETS: set[str] = set()
+_QUIC_MODE: str = "drop"  # "drop" | "allow"
 _QUIC_DROPPED_COUNT = 0
 
 
-def quic_block_set_targets(targets: set[str]):
+def quic_block_set_targets(targets: set[str], mode: str | None = None):
     global _QUIC_DROPPED_COUNT
+    if mode is not None:
+        quic_block_set_mode(mode)
     _QUIC_BLOCK_TARGETS.clear()
     _QUIC_BLOCK_TARGETS.update(t for t in targets if t)
     _QUIC_DROPPED_COUNT = 0
 
 
+def quic_block_set_mode(mode: str):
+    """"drop" forces the TCP fallback (default); "allow" lets QUIC through."""
+    global _QUIC_MODE, _QUIC_DROPPED_COUNT
+    if mode not in ("drop", "allow"):
+        raise ValueError(f"Invalid QUIC mode {mode!r} — expected 'drop' or 'allow'")
+    _QUIC_MODE = mode
+    _QUIC_DROPPED_COUNT = 0
+
+
+def quic_block_mode() -> str:
+    return _QUIC_MODE
+
+
+def quic_block_status() -> dict:
+    """Snapshot for the API/UI: mode, tracked targets, dropped-packet count."""
+    return {
+        "mode": _QUIC_MODE,
+        "targets": sorted(_QUIC_BLOCK_TARGETS),
+        "dropped": _QUIC_DROPPED_COUNT,
+    }
+
+
 def quic_block_clear():
-    global _QUIC_DROPPED_COUNT
+    global _QUIC_DROPPED_COUNT, _QUIC_MODE
     _QUIC_BLOCK_TARGETS.clear()
     _QUIC_DROPPED_COUNT = 0
+    _QUIC_MODE = "drop"
 
 
 def quic_dropped_count() -> int:
@@ -427,13 +463,81 @@ def quic_dropped_count() -> int:
 
 
 def _should_drop_quic(packet) -> bool:
-    """True when this forwarded packet is one of our targets' QUIC flows."""
+    """True when this forwarded packet is one of our targets' QUIC flows AND
+    the engine is in "drop" mode ("allow" lets QUIC pass through)."""
     return (
-        bool(_QUIC_BLOCK_TARGETS)
+        _QUIC_MODE == "drop"
+        and bool(_QUIC_BLOCK_TARGETS)
         and packet.protocol == 17
         and packet.dst_port == 443
         and packet.src_addr in _QUIC_BLOCK_TARGETS
     )
+
+
+# ── Generic UDP policy (WinDivert layer) ─────────────────────────────────────
+# Beyond the hardcoded DHCP/QUIC drops, operators may want per-flow control of
+# ANY forwarded UDP from the targets (games, streaming, custom protocols):
+#  - "drop": silently kill matching UDP flows (WinDivert never reinjects).
+#  - "pass": explicitly allow them (overrides nothing today, but the rule is
+#    visible in status — the first step of a UDP pipeline; payload rewriting
+#    lives in the network layer's UDPModifier rules).
+# Rules are (target IP, dst_port | None, action); None dst_port = all ports.
+_UDP_POLICY_RULES: list[dict] = []
+_UDP_POLICY_MATCHED_COUNT = 0
+_UDP_POLICY_DROPPED_COUNT = 0
+
+
+def udp_policy_add(target_ip: str, dst_port: int | None = None, action: str = "drop"):
+    global _UDP_POLICY_RULES
+    if action not in ("drop", "pass"):
+        raise ValueError(f"Invalid UDP policy action {action!r} — expected 'drop' or 'pass'")
+    if not target_ip:
+        raise ValueError("UDP policy rule needs a target IP")
+    if dst_port is not None:
+        dst_port = int(dst_port)
+    _UDP_POLICY_RULES.append({"target": target_ip, "dst_port": dst_port, "action": action})
+
+
+def udp_policy_clear():
+    global _UDP_POLICY_RULES, _UDP_POLICY_MATCHED_COUNT, _UDP_POLICY_DROPPED_COUNT
+    _UDP_POLICY_RULES.clear()
+    _UDP_POLICY_MATCHED_COUNT = 0
+    _UDP_POLICY_DROPPED_COUNT = 0
+
+
+def udp_policy_remove(index: int) -> bool:
+    """Remove the rule at ``index`` (0-based). Returns False when out of range."""
+    if 0 <= index < len(_UDP_POLICY_RULES):
+        _UDP_POLICY_RULES.pop(index)
+        return True
+    return False
+
+
+def udp_policy_status() -> dict:
+    return {
+        "rules": list(_UDP_POLICY_RULES),
+        "matched": _UDP_POLICY_MATCHED_COUNT,
+        "dropped": _UDP_POLICY_DROPPED_COUNT,
+    }
+
+
+def _udp_policy_action(packet) -> str | None:
+    """First matching rule's action for a forwarded UDP packet (None = no rule).
+
+    Pure decision (no state) so it is unit-testable cross-platform — the
+    WinDivert handler calls it per forwarded packet.
+    """
+    if getattr(packet, "protocol", None) != 17:
+        return None
+    src = getattr(packet, "src_addr", None)
+    dport = getattr(packet, "dst_port", None)
+    for rule in _UDP_POLICY_RULES:
+        if rule["target"] != src:
+            continue
+        if rule["dst_port"] is not None and rule["dst_port"] != dport:
+            continue
+        return rule["action"]
+    return None
 
 
 def windivert_last_error() -> str | None:
@@ -537,10 +641,20 @@ def _start_windivert(proxy_port: int) -> bool:
                     ):
                         return
                 # QUIC/HTTP3 block: drop the target's UDP/443 so clients fall
-                # back to interceptable TCP/TLS (see _QUIC_BLOCK_TARGETS).
+                # back to interceptable TCP/TLS (see _QUIC_BLOCK_TARGETS) —
+                # unless the operator switched the engine to "allow".
                 if _should_drop_quic(packet):
                     _QUIC_DROPPED_COUNT += 1
                     return
+                # Generic UDP policy (drop/pass rules on any forwarded UDP).
+                if packet.protocol == 17:
+                    global _UDP_POLICY_MATCHED_COUNT, _UDP_POLICY_DROPPED_COUNT
+                    action = _udp_policy_action(packet)
+                    if action is not None:
+                        _UDP_POLICY_MATCHED_COUNT += 1
+                        if action == "drop":
+                            _UDP_POLICY_DROPPED_COUNT += 1
+                            return
                 _WINDIVERT_FORWARDED_COUNT += 1
                 _WINDIVERT_LAST_FORWARDED_TS = time.time()
                 if _WINDIVERT_FORWARDED_COUNT <= 5:
