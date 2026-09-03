@@ -150,7 +150,7 @@ jobs:
           files: |
             ${{ matrix.asset_pattern }}
           # Re-running the release (re-tag) must REPLACE assets, not pile up
-          # duplicates — GitHub renames on same-name conflict otherwise.
+          # duplicates -- GitHub renames on same-name conflict otherwise.
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
