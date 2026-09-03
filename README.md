@@ -38,6 +38,7 @@
 | Area | Capabilities |
 |------|-------------|
 | **Traffic interception** | ARP spoofing (zero-config LAN MITM), transparent proxy, regular forward proxy, WebSocket capture |
+| **Network layer (passive)** | Wireshark-style LAN capture: live packet list with detail dissection, TCP/UDP stream reassembly, protocol decoders (TLS/HTTP/HTTP2/DNS/QUIC), PCAP/PCAPNG export, ARP-spoof & ICMP-tunnel detection |
 | **Vulnerability scanning** | 210+ passive checks, 110+ active probes, custom regex checks, content discovery, JS-aware crawler |
 | **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
 | **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
@@ -48,7 +49,7 @@
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
 | **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
 | **Security Hardening** | SQLCipher AES-256 encryption at-rest, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail |
-| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 620+ tests, CI/CD pipeline, Electron code signing |
+| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 900+ tests, CI/CD pipeline, Electron code signing |
 
 Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
 
@@ -65,6 +66,7 @@ Nyx is an open-source web security testing platform. It provides traffic interce
 | **Match & Replace** | Automated request/response rewriting rules (regex supported) |
 | **WebSocket Viewer** | Inspect and replay WebSocket frames |
 | **QUIC/HTTP3 Blocking** | Drops targets' UDP/443 so QUIC-capable clients fall back to interceptable TCP/TLS — no traffic escapes the proxy |
+| **Network (Packet Capture)** | Wireshark-style passive capture of the LAN: live packet list, TCP/UDP stream reassembly, protocol decoders (TLS/HTTP/HTTP2/DNS/QUIC), PCAP export — independent of the proxy |
 | **Activity Monitor** | Live per-target view of contacted domains (TLS SNI + HTTP Host) — full visibility of what each device is doing even without a trusted certificate |
 | **HAR Export** | One-click export of the captured session as HAR 1.2 (opens in Chrome DevTools, Firefox, Charles) |
 
@@ -443,6 +445,7 @@ distinct, honest layers of visibility:
 | Layer | What you see | Requirement |
 |-------|-------------|-------------|
 | **Activity Monitor** (always on) | Every domain each target contacts — live, per-IP, with request counts and recency. Plus DNS queries (with DNS spoofing), plain HTTP in full, traffic volumes/timing | Nothing — works out of the box |
+| **Packets (network layer)** (auto with session) | Raw packets scoped to the selected targets + DHCP handshake frames; double-click opens a Wireshark-style dissection (layer tree + hexdump) — the fastest way to see *why* a target isn't decrypting (ClientHello → RST = cert rejection, UDP/443 = QUIC bypass, missing DISCOVER = DHCP takeover failed) | Nothing — degrades gracefully if Npcap is missing |
 | **Full decryption** | Complete request/response contents | The Nyx CA installed on the target: open `http://<nyx-ip>:18081` from the device or scan the QR shown in the app |
 
 The Activity Monitor reframes what other tools dismiss as "failed TLS
@@ -534,7 +537,7 @@ npm run dev
 ### Quality gates
 
 ```bash
-# Backend tests (576 tests)
+# Backend tests (909 tests)
 cd backend && python -m pytest tests -q --asyncio-mode=auto
 
 # Frontend: type check, lint, unit tests
@@ -791,7 +794,7 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
 ### Running Tests
 
 ```bash
-# Backend tests (455+ tests covering all modules)
+# Backend tests (900+ tests covering all modules)
 cd backend
 python -m pytest tests/ -v --asyncio-mode=auto
 
@@ -844,6 +847,13 @@ nyx/
 
 This project is licensed under the [MIT License](LICENSE).
 
+## Contributors
+
+| | What they built |
+|---|---|
+| **[Terminalkid09](https://github.com/Terminalkid09)** | Creator and lead developer — the entire platform: proxy engine, MITM interception (ARP/DHCP/NDP, auto-fallback, reactive ARP, WiFi AP mode), all scanning modules (passive/active scanner, fuzzer, auto-exploit, session handling, match & replace), Repeater, Interceptor, decoding tools, storage/session architecture, Electron desktop app, CI and release pipeline. Network-layer MITM integration: dedicated MITM session, target-scoped packet feed with Wireshark-style detail, session sync and reliability fixes across the stack |
+| **[traynertunder2047](https://github.com/traynertunder2047)** | Network capture layer: passive packet engine (pcap, BPF, interface watchdog), protocol decoders (TLS, HTTP, HTTP/2, DNS, QUIC), TCP/UDP stream reassembly, live stats, PCAP/PCAPNG support, ARP spoof detector, ICMP tunnel detector, UDP modifier and the Network tab UI |
+
 ## Authorized Use Only
 
 Nyx is a security testing tool intended for **authorized penetration testing,
@@ -856,5 +866,5 @@ them when the engagement ends. The authors accept no liability for misuse.
 ---
 
 <p align="center">
-  Built with ❤️ by <a href="https://github.com/Terminalkid09">Terminalkid09</a>
+  Built with ❤️ by <a href="https://github.com/Terminalkid09">Terminalkid09</a> &amp; <a href="https://github.com/traynertunder2047">traynertunder2047</a>
 </p>
