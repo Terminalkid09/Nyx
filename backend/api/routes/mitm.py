@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from core.proxy.engine import (
     ProxyEngine,
@@ -291,8 +291,40 @@ class MITMStartRequest(BaseModel):
     # "wifi-ap" turns the machine into a rogue access point: the target
     # connects to us and we ARE the gateway — zero spoofing, zero detection.
     enable_wifi_ap: bool = False
-    wifi_ap_ssid: str = "Nyx"
-    wifi_ap_passphrase: str = "nyxmitm2026"
+    wifi_ap_ssid: str = Field(default="Nyx", min_length=1, max_length=32)
+    wifi_ap_passphrase: str = Field(default="nyxmitm2026", min_length=8, max_length=63)
+    # ``None`` keeps the legacy "serve every client" AP. A non-empty list
+    # turns the AP into a target-scoped one: hostapd gets a MAC ACL and
+    # dnsmasq only leases addresses to those devices. An explicitly empty
+    # list is rejected instead of silently widening the AP.
+    wifi_ap_allowed_macs: list[str] | None = None
+    # SSID/passphrase are interpolated into netsh arguments and hostapd.conf.
+    # Bound them at the API boundary so an authenticated caller cannot inject
+    # shell metacharacters or hostapd directives (SEC-01).
+    @field_validator("wifi_ap_ssid")
+    @classmethod
+    def _validate_ssid(cls, value: str) -> str:
+        from modules.wifi_ap import validate_ssid
+        return validate_ssid(value)
+
+    @field_validator("wifi_ap_passphrase")
+    @classmethod
+    def _validate_passphrase(cls, value: str) -> str:
+        from modules.wifi_ap import validate_passphrase
+        return validate_passphrase(value)
+
+    @field_validator("wifi_ap_allowed_macs")
+    @classmethod
+    def _validate_allowed_macs(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        from modules.wifi_ap import validate_mac_list
+        if not value:
+            raise ValueError(
+                "wifi_ap_allowed_macs must contain at least one MAC address; "
+                "omit it to start an unscoped AP"
+            )
+        return validate_mac_list(value)
 
 
 class MITMStartResponse(BaseModel):
@@ -536,9 +568,22 @@ async def _mitm_start_locked(req: MITMStartRequest):
 
     admin = _is_admin()
     if not admin:
-        logger.warning("Not running as admin — ARP spoofing and port redirect will fail. Run Nyx as administrator.")
-    else:
-        logger.info("Running with admin privileges")
+        # Refuse up front instead of letting switch_to_transparent() fail with
+        # an opaque 500 ("WinDivert is not available"): interception needs raw
+        # sockets and port redirection, so without elevation the honest answer
+        # is "start Nyx as Administrator, or use Stealth Mode".
+        logger.warning("MITM start refused: not running as administrator/root")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MITM interception requires Administrator (Windows) or root "
+                "(Linux/macOS): raw sockets plus port redirection. Launch Nyx "
+                "elevated, or use Stealth Mode — set the target's proxy to "
+                f"this machine's IP and port {_engine.port if _engine else 8080} "
+                "— which does not need elevated privileges."
+            ),
+        )
+    logger.info("Running with admin privileges")
 
     if _engine.mode != "transparent":
         # switch_to_transparent() stops/restarts the proxy and busy-waits on
@@ -672,11 +717,14 @@ async def _mitm_start_locked(req: MITMStartRequest):
                 wifi_ap_manager = WiFiAPManager(
                     ssid=req.wifi_ap_ssid or "Nyx",
                     passphrase=req.wifi_ap_passphrase or "nyxmitm2026",
+                    allowed_macs=req.wifi_ap_allowed_macs,
                 )
                 ap_result = await wifi_ap_manager.start()
+                # Do not echo the passphrase into warnings: the response is
+                # surfaced in the UI and may be persisted in logs/exports.
                 warnings.append(
                     f"WiFi AP active: connect the target to SSID "
-                    f"'{req.wifi_ap_ssid or 'Nyx'}' (pass: {req.wifi_ap_passphrase or 'nyxmitm2026'}). "
+                    f"'{wifi_ap_manager.ssid}'. "
                     f"{ap_result.get('note', '')}"
                 )
                 _wifi_ap_manager = wifi_ap_manager

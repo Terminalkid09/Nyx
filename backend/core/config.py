@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
@@ -8,12 +9,37 @@ from core.secrets_store import secret_key as _stored_secret_key
 logger = logging.getLogger(__name__)
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _default_database_url() -> str:
+    """Anchor the SQLite file to a stable directory (BUG-08).
+
+    The old default was ``sqlite+aiosqlite:///nyx.db``, resolved against the
+    process CWD: starting Nyx from the repo root and from ``backend/`` produced
+    two different databases with two different histories. Prefer NYX_HOME (the
+    packaged app sets it), then keep using an existing file from either old
+    location so no user data is orphaned, then fall back to the project root.
+    """
+    home = os.environ.get("NYX_HOME")
+    if home:
+        return f"sqlite+aiosqlite:///{(Path(home) / 'nyx.db').as_posix()}"
+    for candidate in (
+        Path.cwd() / "nyx.db",
+        _PROJECT_ROOT / "backend" / "nyx.db",
+        _PROJECT_ROOT / "nyx.db",
+    ):
+        if candidate.exists():
+            return f"sqlite+aiosqlite:///{candidate.as_posix()}"
+    return f"sqlite+aiosqlite:///{(_PROJECT_ROOT / 'nyx.db').as_posix()}"
+
+
 def _load_secret_key() -> str:
     return _stored_secret_key()
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite+aiosqlite:///nyx.db"
+    DATABASE_URL: str = _default_database_url()
     PROXY_HOST: str = "0.0.0.0"
     PROXY_PORT: int = 8080
     API_HOST: str = "127.0.0.1"
@@ -25,6 +51,31 @@ class Settings(BaseSettings):
     SECRET_KEY: str = ""
     PROXY_MODE: str = "regular"
     DEBUG: bool = False
+
+    # Host header values accepted by the API. The default set is the desktop
+    # app's loopback addresses; "test"/"testserver" are the Starlette test
+    # client defaults. Add a host here only if you deliberately front the API
+    # with a reverse proxy (SEC-03: DNS rebinding sends Host: attacker.tld).
+    API_ALLOWED_HOSTS: str = ""
+    # Reverse proxies allowed to call the API without an X-API-Key. Used by the
+    # Docker compose stack (nginx -> backend). Keep empty for a plain desktop
+    # install; loopback is always trusted.
+    TRUSTED_PROXY_CIDRS: str = ""
+    # A paused interceptor flow resumes automatically after this many seconds
+    # (0 disables). Without a TTL the target's connection hangs forever if the
+    # user closes the UI while an item is paused (BUG-09).
+    INTERCEPTOR_PAUSE_TTL_SECONDS: int = 120
+    # Hard limit for a single active check. One hung probe used to block the
+    # whole sequential scan (BUG-07).
+    SCAN_CHECK_TIMEOUT_SECONDS: float = 60.0
+    # Refuse to probe a URL outside the session's scope rules (BUG-06).
+    SCAN_ENFORCE_SCOPE: bool = True
+    # Independent checks run concurrently (network-bound), bounded so a scan
+    # does not flood the target. Results are still deduplicated in order.
+    SCAN_MAX_CONCURRENCY: int = 4
+    # Domains the proxy logger drops as noise (health checks, OCSP, ...).
+    # Empty list means "use the built-in defaults".
+    PROXY_NOISE_DOMAINS: str = ""
 
     # When False (or when the Nyx CA is NOT installed in the local OS trust
     # store), the proxy stops forcing TLS MITM: HTTPS flows are tunnelled

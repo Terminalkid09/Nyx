@@ -23,6 +23,22 @@ logger = logging.getLogger(__name__)
 _SQLCIPHER_KEY = os.environ.get("NYX_SQLCIPHER_KEY", "")
 
 
+def pragma_key_literal(key: str) -> str:
+    """Return the quoted literal for ``PRAGMA key``.
+
+    PRAGMA statements do not accept bound parameters, so the key has to be
+    embedded in the SQL string. Single quotes would terminate the literal and
+    let a crafted key inject further PRAGMAs (BUG-15). Reject them loudly
+    instead of silently weakening the database.
+    """
+    if not key or "'" in key or "\x00" in key:
+        raise ValueError(
+            "NYX_SQLCIPHER_KEY must be non-empty and must not contain "
+            "single quotes or NUL bytes"
+        )
+    return f"'{key}'"
+
+
 def is_sqlcipher_available() -> bool:
     """Check if pysqlcipher3 is installed and functional."""
     if not _SQLCIPHER_KEY:
@@ -59,7 +75,7 @@ def configure_sqlcipher_engine(engine) -> None:
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlcipher_key(dbapi_conn, _connection_record):
         cursor = dbapi_conn.cursor()
-        cursor.execute(f"PRAGMA key = '{_SQLCIPHER_KEY}'")
+        cursor.execute(f"PRAGMA key = {pragma_key_literal(_SQLCIPHER_KEY)}")
         cursor.execute("PRAGMA cipher_compatibility = 3")
         cursor.execute("PRAGMA kdf_iter = 256000")
         cursor.close()

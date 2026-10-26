@@ -54,11 +54,18 @@ async def generate_report(
         raise HTTPException(400, detail=str(e))
 
     media_type = {
-        "html": "text/html",
+        "html": "text/html; charset=utf-8",
         "pdf": "application/pdf",
         "json": "application/json",
-        "md": "text/markdown",
-    }.get(format, "text/plain")
+        "md": "text/markdown; charset=utf-8",
+    }.get(format, "text/plain; charset=utf-8")
 
+    # Without this header a direct download from the browser saved the file as
+    # "generate" (the last path segment) and the UI had to rename it.
+    filename = f"nyx-report-{str(session_id)[:8]}.{format}"
     from fastapi.responses import Response
-    return Response(content=report_bytes, media_type=media_type)
+    return Response(
+        content=report_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

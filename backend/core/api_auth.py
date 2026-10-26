@@ -1,4 +1,5 @@
 import hmac
+import ipaddress
 import logging
 import time
 import threading
@@ -8,6 +9,7 @@ from urllib.parse import urlparse
 from fastapi import Request, WebSocket
 from fastapi.responses import JSONResponse
 
+from core.config import settings
 from core.secrets_store import SECRET_FILE as KEY_FILE
 from core.secrets_store import api_key as _stored_api_key
 
@@ -51,6 +53,63 @@ def _load_or_generate_key() -> str:
 API_KEY = _load_or_generate_key()
 
 
+# Starlette's TestClient/ASGITransport default hostnames. They are not
+# resolvable on the network, so allowing them does not widen the attack surface
+# (a DNS-rebinding request carries the attacker's own Host value).
+_TEST_HOSTS = {"test", "testserver"}
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _hostname(host_header: str) -> str:
+    """Extract the hostname from a Host header, handling ports and IPv6."""
+    host = (host_header or "").strip().lower()
+    if not host:
+        return ""
+    if host.startswith("["):
+        end = host.find("]")
+        return host[1:end] if end != -1 else ""
+    if host.count(":") == 1:
+        return host.rsplit(":", 1)[0]
+    return host
+
+
+def is_allowed_host(host_header: str) -> bool:
+    """Validate the Host header against the configured allowlist.
+
+    This is the DNS-rebinding guard: a page that makes the browser resolve
+    attacker.example to 127.0.0.1 still sends ``Host: attacker.example``, so
+    rejecting unknown hosts blocks it even though the TCP peer is loopback.
+    """
+    allowed = set(_LOOPBACK_HOSTS) | _TEST_HOSTS
+    allowed |= {
+        h.strip().lower()
+        for h in (settings.API_ALLOWED_HOSTS or "").split(",")
+        if h.strip()
+    }
+    return _hostname(host_header) in allowed
+
+
+def is_trusted_proxy(client_host: str) -> bool:
+    """Return True when the peer is inside a configured proxy network."""
+    networks = [
+        c.strip() for c in (settings.TRUSTED_PROXY_CIDRS or "").split(",")
+        if c.strip()
+    ]
+    if not networks or not client_host:
+        return False
+    try:
+        addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    for cidr in networks:
+        try:
+            if addr in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            logger.warning("Ignoring invalid TRUSTED_PROXY_CIDRS entry: %r", cidr)
+    return False
+
+
 async def verify_api_key(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -65,9 +124,21 @@ async def verify_api_key(request: Request, call_next):
     if not _check_rate_limit(client_host):
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Slow down."})
 
-    # Allow requests from localhost to pass without key
-    # (the desktop app always connects to 127.0.0.1:8000)
-    if client_host in ("127.0.0.1", "::1", "localhost"):
+    # Reject foreign Host headers and browser cross-site calls before the
+    # loopback trust shortcut: a DNS-rebound request is also loopback.
+    if not is_allowed_host(request.headers.get("host", "")):
+        return JSONResponse(
+            status_code=403, content={"detail": "Invalid Host header"}
+        )
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Cross-site requests are not allowed"},
+        )
+
+    # Allow requests from localhost / a trusted reverse proxy to pass without
+    # key (the desktop app always connects to 127.0.0.1:8000).
+    if client_host in _LOOPBACK_HOSTS or is_trusted_proxy(client_host):
         return await call_next(request)
 
     # Certain API paths need no key
@@ -91,7 +162,10 @@ async def verify_api_key(request: Request, call_next):
 # Origins allowed to open a WebSocket to the local API: the UI served by this
 # backend itself, plus the Vite dev server used during frontend development.
 _WS_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1")
-_WS_ALLOWED_PORTS = (8000, 5173)
+# 80 is the Docker compose frontend: nginx proxies /ws to the backend. The
+# Origin must still resolve to a loopback hostname, so this does not let a
+# remote site open the socket.
+_WS_ALLOWED_PORTS = (80, 8000, 5173)
 
 
 def validate_ws_origin(ws: WebSocket) -> bool:

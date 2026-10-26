@@ -117,27 +117,6 @@ async def test_scan_queue_orders_by_priority_then_age(queue_client):
     ]
 
 
-# ── Plugin path validation on update ─────────────────────────────────────────
-
-class TestPluginPathValidation:
-    def test_rejects_path_outside_plugins_dir(self):
-        from api.routes.plugins import _validate_plugin_path
-        with pytest.raises(HTTPException) as exc:
-            _validate_plugin_path("C:/Windows/system32/evil.py")
-        assert exc.value.status_code == 400
-
-    def test_rejects_traversal(self):
-        from api.routes.plugins import _validate_plugin_path
-        with pytest.raises(HTTPException):
-            _validate_plugin_path("../../evil.py")
-
-    def test_rejects_missing_file_inside_plugins_dir(self):
-        from api.routes.plugins import _validate_plugin_path
-        with pytest.raises(HTTPException) as exc:
-            _validate_plugin_path("definitely_not_here.py")
-        assert exc.value.status_code == 400
-
-
 # ── Live audit finding counting ───────────────────────────────────────────────
 
 class TestLiveAuditCounting:

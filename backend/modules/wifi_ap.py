@@ -21,6 +21,7 @@ UI offers AP mode as an option; if unavailable it explains why.
 import asyncio
 import logging
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,59 @@ _PASSPHRASE = "nyxmitm2026"
 _SUBNET = "192.168.42.0/24"
 _GATEWAY = "192.168.42.1"
 _DHCP_RANGE = "192.168.42.10,192.168.42.100,12h"
+
+# These values reach shell-adjacent calls (netsh) and generated hostapd.conf
+# lines. They are validated at the API boundary AND here, so the manager is
+# safe even when someone constructs it directly from a script or a plugin.
+# - SSID: printable ASCII except the double quote (would break netsh quoting);
+#   no CR/LF/NUL (would inject hostapd.conf directives on Linux).
+# - Passphrase: WPA requires 8-63 chars; restricting the alphabet also keeps
+#   the value out of shell/config metacharacters.
+_SSID_RE = re.compile(r'^[^\x00-\x1f\x7f"]{1,32}$')
+_PASSPHRASE_RE = re.compile(r"^[A-Za-z0-9!@#$%^&*._-]{8,63}$")
+_IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
+_MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+
+
+def validate_mac_list(macs: list[str]) -> list[str]:
+    """Normalise and validate an AP target allowlist.
+
+    An empty allowlist is rejected by the manager: a target-scoped AP that
+    accepts everyone is exactly the unethical-by-default behaviour this
+    feature is supposed to remove.
+    """
+    cleaned = []
+    for mac in macs or []:
+        value = str(mac).strip().upper()
+        if not _MAC_RE.match(value):
+            raise ValueError(f"Invalid MAC address in AP allowlist: {mac!r}")
+        if value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def validate_ssid(value: str) -> str:
+    if not isinstance(value, str) or not _SSID_RE.match(value):
+        raise ValueError(
+            "SSID must be 1-32 printable characters and must not contain "
+            "quotes or control characters"
+        )
+    return value
+
+
+def validate_passphrase(value: str) -> str:
+    if not isinstance(value, str) or not _PASSPHRASE_RE.match(value):
+        raise ValueError(
+            "WPA passphrase must be 8-63 characters from "
+            "[A-Za-z0-9!@#$%^&*._-]"
+        )
+    return value
+
+
+def validate_iface(value: str) -> str:
+    if not isinstance(value, str) or not _IFACE_RE.match(value):
+        raise ValueError(f"Unsafe network interface name: {value!r}")
+    return value
 
 
 class WiFiAPError(Exception):
@@ -84,11 +138,31 @@ def is_supported() -> dict:
 class WiFiAPManager:
     """Start/stop a rogue access point with DHCP so targets route through us."""
 
-    def __init__(self, ssid: str = _SSID, passphrase: str = _PASSPHRASE):
-        self.ssid = ssid
-        self.passphrase = passphrase
+    def __init__(
+        self,
+        ssid: str = _SSID,
+        passphrase: str = _PASSPHRASE,
+        allowed_macs: list[str] | None = None,
+    ):
+        try:
+            self.ssid = validate_ssid(ssid)
+            self.passphrase = validate_passphrase(passphrase)
+            self.allowed_macs = (
+                None if allowed_macs is None else validate_mac_list(allowed_macs)
+            )
+        except ValueError as exc:
+            raise WiFiAPError(str(exc)) from exc
+        if self.allowed_macs == []:
+            raise WiFiAPError(
+                "Refusing to start a target-scoped AP with an empty allowlist"
+            )
+        self._accept_file: str | None = (
+            str(Path(tempfile.gettempdir()) / "nyx_hostapd_accept.conf")
+            if self.allowed_macs is not None else None
+        )
         self._running = False
         self._proc: subprocess.Popen | None = None
+        self._dnsmasq_proc: subprocess.Popen | None = None
         self._hostapd_conf: str | None = None
         self._dnsmasq_conf: str | None = None
 
@@ -118,8 +192,20 @@ class WiFiAPManager:
                 except Exception:
                     pass
             self._proc = None
+        if self._dnsmasq_proc:
+            try:
+                self._dnsmasq_proc.terminate()
+                await asyncio.wait_for(
+                    asyncio.to_thread(self._dnsmasq_proc.wait), timeout=5
+                )
+            except Exception:
+                try:
+                    self._dnsmasq_proc.kill()
+                except Exception:
+                    pass
+            self._dnsmasq_proc = None
         # Cleanup temp configs
-        for path in (self._hostapd_conf, self._dnsmasq_conf):
+        for path in (self._hostapd_conf, self._dnsmasq_conf, self._accept_file):
             if path:
                 try:
                     Path(path).unlink(missing_ok=True)
@@ -129,14 +215,15 @@ class WiFiAPManager:
         try:
             if sys_platform == "windows":
                 subprocess.run(
-                    "netsh wlan stop hostednetwork", shell=True, timeout=10,
-                    capture_output=True,
+                    ["netsh", "wlan", "stop", "hostednetwork"],
+                    shell=False, timeout=10, capture_output=True,
                 )
             elif sys_platform == "linux":
-                subprocess.run(
-                    "pkill -f hostapd; pkill -f dnsmasq", shell=True, timeout=10,
-                    capture_output=True,
-                )
+                for proc_name in ("hostapd", "dnsmasq"):
+                    subprocess.run(
+                        ["pkill", "-f", proc_name], shell=False, timeout=10,
+                        capture_output=True,
+                    )
         except Exception:
             pass
         self._hostapd_conf = None
@@ -153,50 +240,39 @@ class WiFiAPManager:
         iface = self._find_wifi_iface_linux()
         if not iface:
             raise WiFiAPError("No WiFi interface found for AP mode")
+        iface = validate_iface(iface)
 
-        # hostapd config
+        # Target-scoped AP: hostapd serves only the MACs in the accept file,
+        # and dnsmasq only leases to hosts it knows. Config is generated from
+        # validated values (no user string is concatenated raw).
+        if self._accept_file:
+            Path(self._accept_file).write_text(
+                "\n".join(self.allowed_macs or []) + "\n"
+            )
+
         self._hostapd_conf = str(Path(tempfile.gettempdir()) / "nyx_hostapd.conf")
-        Path(self._hostapd_conf).write_text(
-            f"interface={iface}\n"
-            f"ssid={self.ssid}\n"
-            "hw_mode=g\n"
-            "channel=6\n"
-            "wmm_enabled=0\n"
-            "macaddr_acl=0\n"
-            "auth_algs=1\n"
-            "ignore_broadcast_ssid=0\n"
-            "wpa=2\n"
-            f"wpa_passphrase={self.passphrase}\n"
-            "wpa_key_mgmt=WPA-PSK\n"
-            "wpa_pairwise=TKIP\n"
-            "rsn_pairwise=CCMP\n"
-        )
+        Path(self._hostapd_conf).write_text(self._hostapd_config(iface))
 
         # dnsmasq config: DHCP + DNS pointing to our proxy
         self._dnsmasq_conf = str(Path(tempfile.gettempdir()) / "nyx_dnsmasq.conf")
-        Path(self._dnsmasq_conf).write_text(
-            f"interface={iface}\n"
-            f"dhcp-range={_DHCP_RANGE}\n"
-            f"dhcp-option=3,{_GATEWAY}\n"   # default gateway = us
-            f"dhcp-option=6,{_GATEWAY}\n"   # DNS = us
-            "no-resolv\n"
-            f"server={_GATEWAY}\n"
-            "log-queries\n"
-        )
+        Path(self._dnsmasq_conf).write_text(self._dnsmasq_config(iface))
 
         try:
-            subprocess.run(f"ip link set {iface} up", shell=True, check=True, timeout=10)
+            subprocess.run(["ip", "link", "set", iface, "up"],
+                           shell=False, check=True, timeout=10)
             subprocess.run(
-                f"ip addr add {_GATEWAY}/24 dev {iface}", shell=True, check=True, timeout=10
+                ["ip", "addr", "add", f"{_GATEWAY}/24", "dev", iface],
+                shell=False, check=True, timeout=10,
             )
-            subprocess.run("sysctl -w net.ipv4.ip_forward=1", shell=True, timeout=10)
+            subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"],
+                           shell=False, timeout=10)
             self._proc = subprocess.Popen(
-                f"hostapd {self._hostapd_conf}",
-                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                ["hostapd", self._hostapd_conf],
+                shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            subprocess.Popen(
-                f"dnsmasq --conf-file={self._dnsmasq_conf}",
-                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            self._dnsmasq_proc = subprocess.Popen(
+                ["dnsmasq", f"--conf-file={self._dnsmasq_conf}"],
+                shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             self._running = True
             return {
@@ -212,18 +288,65 @@ class WiFiAPManager:
         except Exception as e:
             raise WiFiAPError(f"Linux AP start failed: {e}")
 
+    def _hostapd_config(self, iface: str) -> str:
+        """Render hostapd.conf. Pure function: easy to assert in tests."""
+        lines = [
+            f"interface={iface}",
+            f"ssid={self.ssid}",
+            "hw_mode=g",
+            "channel=6",
+            "wmm_enabled=0",
+            "macaddr_acl=1" if self.allowed_macs is not None else "macaddr_acl=0",
+        ]
+        if self._accept_file:
+            lines.append(f"accept_mac_file={self._accept_file}")
+        lines += [
+            "auth_algs=1",
+            "ignore_broadcast_ssid=0",
+            "wpa=2",
+            f"wpa_passphrase={self.passphrase}",
+            "wpa_key_mgmt=WPA-PSK",
+            "wpa_pairwise=TKIP",
+            "rsn_pairwise=CCMP",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def _dnsmasq_config(self, iface: str) -> str:
+        """Render dnsmasq.conf, including the DHCP allowlist when scoped."""
+        lines = [
+            f"interface={iface}",
+            f"dhcp-range={_DHCP_RANGE}",
+            f"dhcp-option=3,{_GATEWAY}",
+            f"dhcp-option=6,{_GATEWAY}",
+            "no-resolv",
+            f"server={_GATEWAY}",
+            "log-queries",
+        ]
+        if self.allowed_macs is not None:
+            lines.append("dhcp-ignore=tag:!known")
+            lines += [f"dhcp-host={mac}" for mac in self.allowed_macs]
+        return "\n".join(lines) + "\n"
+
     async def _start_windows(self) -> dict:
         """Windows hosted network (netsh). Requires Administrator."""
+        if self.allowed_macs is not None:
+            raise WiFiAPError(
+                "A target-scoped AP needs hostapd MAC filtering, which the "
+                "Windows hosted-network API does not expose. Use Linux."
+            )
         try:
             # Set the SSID/passphrase and start
-            set_cmd = (
-                f'netsh wlan set hostednetwork mode=allow '
-                f'ssid="{self.ssid}" key="{self.passphrase}"'
+            # Argument list + shell=False: an SSID can no longer break out of
+            # the quoting and become a command (SEC-01).
+            subprocess.run(
+                ["netsh", "wlan", "set", "hostednetwork", "mode=allow",
+                 f"ssid={self.ssid}", f"key={self.passphrase}"],
+                shell=False, check=True, timeout=15, capture_output=True,
             )
-            subprocess.run(set_cmd, shell=True, check=True, timeout=15,
-                           capture_output=True)
-            subprocess.run("netsh wlan start hostednetwork", shell=True,
-                           check=True, timeout=15, capture_output=True)
+            subprocess.run(
+                ["netsh", "wlan", "start", "hostednetwork"],
+                shell=False, check=True, timeout=15, capture_output=True,
+            )
             self._running = True
             return {
                 "status": "ok",
