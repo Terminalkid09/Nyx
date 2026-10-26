@@ -75,8 +75,44 @@ async def _apply_lightweight_migrations():
         logger.warning("Lightweight migration failed: %s", e)
 
 
+async def _needs_alembic_baseline() -> bool:
+    """True when the schema exists but was never tracked by alembic.
+
+    Databases created by ``create_all`` (frozen builds, older app versions)
+    hold every table but no ``alembic_version``. ``alembic upgrade head`` then
+    replays the initial revision against the existing tables and dies with
+    "table ... already exists", so the version is never stamped and every
+    startup repeats the failure. Adopting the schema with ``alembic stamp
+    head`` before the upgrade makes those databases migratable again.
+    """
+    from sqlalchemy import inspect
+
+    try:
+        async with engine.connect() as conn:
+            tables = await conn.run_sync(lambda c: inspect(c).get_table_names())
+            if not tables:
+                return False
+            if "alembic_version" not in tables:
+                return True
+            # A failed upgrade leaves an empty alembic_version behind (SQLite
+            # runs DDL non-transactionally), so "table exists" is not enough:
+            # no stamped revision means no migration was ever applied.
+            rows = await conn.exec_driver_sql("SELECT COUNT(*) FROM alembic_version")
+            return (rows.scalar() or 0) == 0
+    except Exception as e:
+        logger.debug("Alembic baseline detection skipped: %s", e)
+        return False
+
+
 async def run_alembic_migration():
     await _enable_wal()
+    if _is_sqlite and not is_sqlcipher_available():
+        logger.warning(
+            "SQLite database is NOT encrypted at rest (%s). Intercepted bodies "
+            "and cookies are stored in clear text; enable NYX_SQLCIPHER_KEY or "
+            "full-disk encryption.",
+            _db_url,
+        )
     if getattr(sys, "frozen", False):
         logger.info("Frozen build detected — DATABASE_URL=%r engine=%r", settings.DATABASE_URL, type(engine).__module__)
         logger.info("Using create_all instead of alembic subprocess")
@@ -93,20 +129,30 @@ async def run_alembic_migration():
     alembic_dir = str(Path(__file__).parent.parent.parent)
     env = {**os.environ, "DATABASE_URL": settings.DATABASE_URL}
     env.setdefault("PYTHONPATH", alembic_dir)
-    try:
+
+    async def _alembic(*args: str):
         proc = await asyncio.create_subprocess_exec(
-            "alembic", "upgrade", "head",
+            sys.executable, "-m", "alembic", *args,
             cwd=alembic_dir,
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        if proc.returncode == 0:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        return proc.returncode, out.decode()
+
+    try:
+        if await _needs_alembic_baseline():
+            logger.info("Existing schema has no alembic version — adopting it (stamp head)")
+            rc, out = await _alembic("stamp", "head")
+            if rc != 0:
+                logger.warning("Alembic stamp exited with code %d: %s", rc, out)
+        rc, out = await _alembic("upgrade", "head")
+        if rc == 0:
             logger.info("Database migrations applied successfully")
         else:
-            logger.warning("Alembic exited with code %d: %s", proc.returncode, stdout.decode())
-            raise RuntimeError(f"Alembic failed: {stdout.decode()}")
+            logger.warning("Alembic exited with code %d: %s", rc, out)
+            raise RuntimeError(f"Alembic failed: {out}")
     except Exception as e:
         logger.warning("Alembic migration failed (%s), falling back to create_all", e)
         async with engine.begin() as conn:
