@@ -28,7 +28,8 @@ Legenda: **FATTO** = codice + test verdi; **PARZIALE** = nucleo implementato, UI
 | Sessione 24/10 (2) | Endpoint privilegiati provati live (MITM/capture/CA/export) + CA rimozione verificata + `attack-path` limitato | Vedi §0.2 |
 | v1.3 | F-01 (profili RoE firmati, matcher, rate gate, API, pagina RoE), F-03 (attack path graph + `/api/attack-path/{session_id}` + vista grafo), F-04 (verifier differenziale + endpoint + pagina Verifier) | FATTO (nucleo + UI) |
 | v1.3 | Import OpenAPI 2.0/3.x (inventario endpoint + warning di contratto, API `POST /api/import/openapi`, comando `nyx import openapi`, applicazione dei server allo scope di sessione) | FATTO |
-| v1.3 residuo | Import Burp/ZAP, multi-ruolo A/B, report NIS2 | APERTO |
+| v1.3 | Multi-ruolo A/B (`POST /api/ab-test/run`: due set di header + gamba anonima, diff normalizzato → `suspected_idor`/`isolated`/`unauthenticated_access`; nucleo senza UI) | FATTO (nucleo) |
+| v1.3 residuo | Import Burp/ZAP, UI A/B, report NIS2 | APERTO |
 | v2.0 | AP Range: allowlist MAC, `macaddr_acl=1`, DHCP `tag:!known`, rifiuto allowlist vuota, Linux-only | PARZIALE (config/validazione, senza multi-BSSID/shaping) |
 | v2.0 residuo | F-05 Sensor, F-06 mobile kit, F-08 import PCAP, F-09 QUIC visibility, F-10 plugin SDK | APERTO |
 | Network layer (TT) | NET-01, NET-02, F-05, F-08, F-09 | Non toccati (perimetro dell'altro maintainer) |

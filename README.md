@@ -785,6 +785,24 @@ refused. The payload also carries **contract warnings** — operations without a
 security requirement, plaintext servers, parameters without a schema type,
 deprecated operations — so a CI job can fail on them.
 
+### Multi-identity replay (IDOR)
+
+Send the same request as two users and compare what comes back:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/ab-test/run -H 'Content-Type: application/json' -d '{
+  "url": "https://target.example/api/items/42",
+  "identity_a": {"name": "alice", "headers": {"Cookie": "session=<alice>"}},
+  "identity_b": {"name": "bob",   "headers": {"Cookie": "session=<bob>"}}
+}'
+```
+
+The reply is a verdict — `suspected_idor`, `isolated`, `review`,
+`unauthenticated_access` or `inconclusive` — with the similarity score, the
+signals behind it and every sample. Per-response tokens (CSRF nonces, long
+ids) are normalised before comparing, so a rotated nonce does not look like an
+isolation. The request goes through the same scope/RoE gate as any other probe.
+
 ### Prometheus Metrics
 
 Nyx exposes a `/metrics` endpoint in Prometheus text format:
