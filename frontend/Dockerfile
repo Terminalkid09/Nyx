@@ -1,7 +1,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
+COPY package*.json .npmrc ./
+# npm ci + the committed lockfile: the same resolution CI uses. .npmrc keeps
+# legacy-peer-deps on for eslint-plugin-jsx-a11y's lagging peer range.
+RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
