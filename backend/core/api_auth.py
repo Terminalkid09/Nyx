@@ -1,6 +1,7 @@
 import hmac
 import ipaddress
 import logging
+import secrets
 import time
 import threading
 from collections import defaultdict
@@ -12,6 +13,7 @@ from fastapi.responses import JSONResponse
 from core.config import settings
 from core.secrets_store import SECRET_FILE as KEY_FILE
 from core.secrets_store import api_key as _stored_api_key
+from core.secrets_store import restrict_to_owner
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,38 @@ def _load_or_generate_key() -> str:
 
 
 API_KEY = _load_or_generate_key()
+
+
+# ── Per-boot session token (SEC-03b) ────────────────────────────────────────
+# The loopback trust model assumes 127.0.0.1 means "our UI". It does not: every
+# process running as the same user can reach the API and read captured traffic.
+# A token generated at boot and written next to nyx.secret is only reachable by
+# processes that can read NYX_HOME, and it dies with the process, so it cannot
+# be baked into an attacker's script. The Electron main process reads the file
+# and passes the value to the renderer through the preload bridge.
+SESSION_TOKEN_FILE = KEY_FILE.parent / "session.token"
+
+
+def _new_session_token() -> str:
+    token = secrets.token_urlsafe(32)
+    try:
+        SESSION_TOKEN_FILE.write_text(token, encoding="utf-8")
+        restrict_to_owner(SESSION_TOKEN_FILE)
+    except Exception as e:
+        logger.warning("Could not persist the session token to %s: %s", SESSION_TOKEN_FILE, e)
+    return token
+
+
+SESSION_TOKEN = _new_session_token()
+
+# Endpoints a plain browser must reach without the token: the CA download and
+# removal pages, and the MITM portal a target device is sent to. They are also
+# exempt from the API key for the same reason.
+_TOKEN_EXEMPT_PATHS = {
+    "/api/auth/key",
+    "/api/ca-certificate", "/api/ca-qr",
+    "/api/ca-uninstall", "/api/ca-uninstall-qr",
+}
 
 
 # Starlette's TestClient/ASGITransport default hostnames. They are not
@@ -139,6 +173,17 @@ async def verify_api_key(request: Request, call_next):
     # Allow requests from localhost / a trusted reverse proxy to pass without
     # key (the desktop app always connects to 127.0.0.1:8000).
     if client_host in _LOOPBACK_HOSTS or is_trusted_proxy(client_host):
+        # SEC-03b: in the packaged app even loopback callers must prove they
+        # were handed the token generated at boot.
+        if settings.API_REQUIRE_SESSION_TOKEN:
+            exempt = path in _TOKEN_EXEMPT_PATHS or path.startswith("/api/mitm/portal")
+            if not exempt:
+                given_token = request.headers.get("x-nyx-token", "")
+                if not given_token or not hmac.compare_digest(given_token, SESSION_TOKEN):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Missing or invalid X-Nyx-Token"},
+                    )
         return await call_next(request)
 
     # Certain API paths need no key

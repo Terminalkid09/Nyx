@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld('nyxDesktop', {
   downloadCA: () => ipcRenderer.send('download-ca'),
   setProxyCapture: (active) => ipcRenderer.send('toggle-proxy-capture', active),
   getApiKey: () => ipcRenderer.invoke('get-api-key'),
+  getSessionToken: () => ipcRenderer.invoke('get-session-token'),
 });

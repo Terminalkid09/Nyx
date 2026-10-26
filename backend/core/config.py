@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # Docker compose stack (nginx -> backend). Keep empty for a plain desktop
     # install; loopback is always trusted.
     TRUSTED_PROXY_CIDRS: str = ""
+    # SEC-03b: loopback alone is not a boundary — any local process can call
+    # 127.0.0.1:8000. When True, requests must also carry the X-Nyx-Token that
+    # the backend generates at boot and writes to NYX_HOME/session.token; the
+    # packaged desktop shell reads that file and hands it to the renderer.
+    # Off by default so development and the CLI keep working unchanged.
+    API_REQUIRE_SESSION_TOKEN: bool = False
     # A paused interceptor flow resumes automatically after this many seconds
     # (0 disables). Without a TTL the target's connection hangs forever if the
     # user closes the UI while an item is paused (BUG-09).

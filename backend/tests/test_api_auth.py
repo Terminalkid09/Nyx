@@ -44,3 +44,52 @@ async def test_cert_path_no_auth(transport):
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/api/ca-certificate")
         assert r.status_code != 401
+
+
+# ── SEC-03b: loopback callers must present the per-boot token ───────────────
+
+
+@pytest.fixture
+def require_token(monkeypatch):
+    """Turn the desktop-mode token gate on for the duration of a test."""
+    from core import api_auth
+
+    monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", True)
+    return api_auth
+
+
+@pytest.mark.asyncio
+async def test_loopback_rejected_without_session_token(transport, require_token):
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/sessions")
+    assert r.status_code == 403
+    assert "X-Nyx-Token" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_loopback_rejected_with_wrong_session_token(transport, require_token):
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/sessions", headers={"X-Nyx-Token": "not-the-token"})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_loopback_accepted_with_session_token(transport, require_token):
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/sessions", headers={"X-Nyx-Token": require_token.SESSION_TOKEN})
+    assert r.status_code != 403
+
+
+@pytest.mark.asyncio
+async def test_token_gate_is_off_by_default(transport):
+    """Dev mode and the CLI keep working: no header, no 403."""
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/sessions")
+    assert r.status_code != 403
+
+
+def test_session_token_is_persisted_for_the_shell(require_token):
+    """The Electron main process can only read the token off disk."""
+    token = require_token.SESSION_TOKEN
+    assert len(token) >= 32
+    assert require_token.SESSION_TOKEN_FILE.read_text(encoding="utf-8").strip() == token

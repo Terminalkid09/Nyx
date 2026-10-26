@@ -137,6 +137,13 @@ function startBackend() {
   if (app.isPackaged && fs.existsSync(frontendDist)) {
     env.NYX_FRONTEND_DIST = frontendDist;
   }
+  // SEC-03b: any local process can reach 127.0.0.1:8000. In a packaged build
+  // the backend also demands the per-boot token that only this shell (which
+  // can read NYX_HOME) knows about. Dev mode stays open so `npm run dev` in a
+  // plain browser keeps working without the preload bridge.
+  if (app.isPackaged) {
+    env.API_REQUIRE_SESSION_TOKEN = '1';
+  }
 
   backendProcess = spawn(execPath, execArgs, {
     cwd: backendDir,
@@ -602,6 +609,20 @@ ipcMain.handle('get-api-key', () => {
       if (typeof data.api_key === 'string' && data.api_key.length >= 16) {
         return data.api_key;
       }
+    }
+  } catch {}
+  return null;
+});
+
+// SEC-03b: the backend regenerates this token on every boot, so read it from
+// disk instead of caching it here — a stale value after a backend restart
+// would make every request 403.
+ipcMain.handle('get-session-token', () => {
+  try {
+    const tokenPath = path.join(app.getPath('userData'), 'data', 'session.token');
+    if (fs.existsSync(tokenPath)) {
+      const token = fs.readFileSync(tokenPath, 'utf8').trim();
+      if (token.length >= 16) return token;
     }
   } catch {}
   return null;
