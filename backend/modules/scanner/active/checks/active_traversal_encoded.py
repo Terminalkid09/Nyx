@@ -37,6 +37,7 @@ class ActiveTraversalEncodedCheck(BaseCheck):
                                 evidence=f"Encoding: {encoding_name}\nPayload: {payload}",
                                 remediation="Normalize and validate paths. Reject encoded traversal sequences. Use a mapping for file access.",
                                 cwe="CWE-22",
+                                param=param,
                             ))
                     except Exception:
                         continue

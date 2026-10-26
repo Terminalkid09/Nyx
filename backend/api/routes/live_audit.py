@@ -8,7 +8,6 @@ class LiveAuditConfigUpdate(BaseModel):
     passive_scan: bool | None = None
     active_scan: bool | None = None
     param_discovery: bool | None = None
-    fuzz_discovered: bool | None = None
     max_concurrent_audits: int | None = None
     scope_only: bool | None = None
     throttle_ms: int | None = None

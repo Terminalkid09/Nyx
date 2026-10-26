@@ -3,7 +3,7 @@ import json
 import re
 import urllib.parse
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 NOSQLI_PAYLOADS = [
     ('$ne', '{"$ne": ""}'),
@@ -35,7 +35,7 @@ class NoSqlInjectionCheck(BaseCheck):
 
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload_name, payload_value in NOSQLI_PAYLOADS:
+                for payload_name, payload_value in cap_payloads(NOSQLI_PAYLOADS):
                     modified = copy.deepcopy(base_request)
 
                     if is_json_body:
@@ -88,6 +88,7 @@ class NoSqlInjectionCheck(BaseCheck):
                                     remediation="Use parameterised queries or validate user input against a whitelist. "
                                                 "Sanitize input for MongoDB operators ($ne, $gt, $regex, etc.).",
                                     cwe="CWE-943",
+                                    param=param,
                                 ))
                                 break
 
@@ -104,6 +105,7 @@ class NoSqlInjectionCheck(BaseCheck):
                                              f"Modified status: {resp.status_code}",
                                     remediation="Sanitize input to prevent MongoDB operator injection.",
                                     cwe="CWE-943",
+                                    param=param,
                                 ))
                     except Exception:
                         continue

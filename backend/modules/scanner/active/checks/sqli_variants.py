@@ -54,6 +54,7 @@ class SqliVariantsCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nDatabase: {db_type}",
                                     remediation="Use parameterised queries / prepared statements.",
                                     cwe="CWE-89",
+                                    param=param,
                                 ))
                     except httpx.TimeoutException:
                         if "SLEEP" in payload or "WAITFOR" in payload:
@@ -65,6 +66,7 @@ class SqliVariantsCheck(BaseCheck):
                                 evidence=f"Payload: {payload}",
                                 remediation="Use parameterised queries.",
                                 cwe="CWE-89",
+                                param=param,
                             ))
                     except Exception:
                         continue

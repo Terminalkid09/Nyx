@@ -28,6 +28,7 @@ class ActiveElInjectionAdvancedCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nResponse snippet: {resp.text[:300]}",
                                     remediation="Disable EL evaluation on user input. Use template engines that auto-escape. Validate and sanitize all input.",
                                     cwe="CWE-917",
+                                    param=param,
                                 ))
                                 break
                     except httpx.TimeoutException:
@@ -39,6 +40,7 @@ class ActiveElInjectionAdvancedCheck(BaseCheck):
                             evidence=f"Payload: {payload}",
                             remediation="Disable EL evaluation on user input. Use template engines that auto-escape. Validate and sanitize all input.",
                             cwe="CWE-917",
+                            param=param,
                         ))
                     except Exception:
                         continue

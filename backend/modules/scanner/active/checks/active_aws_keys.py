@@ -44,6 +44,7 @@ class ActiveAwsKeysCheck(BaseCheck):
                                 evidence=f"Pattern matched: {key_type}",
                                 remediation="Rotate exposed keys immediately. Remove keys from source code and use env vars or secret managers.",
                                 cwe="CWE-798",
+                                param=param,
                             ))
                             break
                 except Exception:

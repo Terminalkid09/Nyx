@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import uuid
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -39,16 +40,23 @@ class AuthenticatedScanRequest(BaseModel):
     target_url: str
     params: list[str] = []
     profile: AuthProfile | None = None
+    # Without this the scan bypasses the session scope rules: run_checks only
+    # enforces scope when the event carries a session_id.
+    session_id: str | None = None
 
 
 @router.post("/login/record", response_model=LoginRecordResponse)
 async def record_login(req: LoginRecordRequest):
     """Record login steps from recent proxy traffic for a session."""
+    try:
+        session_id = uuid.UUID(req.session_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, detail="Invalid session_id")
     async with AsyncSessionLocal() as db:
         from sqlalchemy import select
         stmt = (
             select(CapturedRequest)
-            .where(CapturedRequest.session_id == req.session_id)
+            .where(CapturedRequest.session_id == session_id)
             .order_by(CapturedRequest.timestamp.asc())
         )
         if req.login_url:
@@ -108,7 +116,10 @@ async def auth_scan(req: AuthenticatedScanRequest):
     }
 
     try:
-        results = await _active_scanner.run_checks(base_request, req.params)
+        results = await _active_scanner.run_checks(
+            base_request, req.params,
+            event={"session_id": req.session_id},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scan failed: {e}")
 

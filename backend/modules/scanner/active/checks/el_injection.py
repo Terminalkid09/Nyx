@@ -31,6 +31,7 @@ class ElInjectionCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nIndicator: {indicator}",
                                 remediation="Do not evaluate user input as EL expressions. Use secure templating libraries.",
                                 cwe="CWE-917",
+                                param=param,
                             ))
                     except Exception:
                         continue

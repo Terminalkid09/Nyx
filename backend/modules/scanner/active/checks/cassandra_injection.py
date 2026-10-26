@@ -27,6 +27,7 @@ class CassandraInjectionCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nError pattern: {pattern}",
                                     remediation="Use parameterised CQL queries (PreparedStatement). Avoid string concatenation in CQL queries.",
                                     cwe="CWE-943",
+                                    param=param,
                                 ))
                                 break
                     except Exception:

@@ -41,6 +41,7 @@ class SsrfVariantsCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Validate and restrict outbound URLs. Block access to internal IP ranges.",
                                 cwe="CWE-918",
+                                param=param,
                             ))
                     except Exception:
                         continue

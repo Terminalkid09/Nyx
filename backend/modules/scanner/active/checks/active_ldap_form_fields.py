@@ -28,6 +28,7 @@ class ActiveLdapFormFieldsCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nResponse snippet: {resp.text[:300]}",
                                     remediation="Use LDAP escaping functions for all user input. Validate and sanitize form field values before LDAP queries.",
                                     cwe="CWE-90",
+                                    param=param,
                                 ))
                                 break
                     except httpx.TimeoutException:
@@ -39,6 +40,7 @@ class ActiveLdapFormFieldsCheck(BaseCheck):
                             evidence=f"Payload: {payload}",
                             remediation="Use LDAP escaping functions for all user input. Validate and sanitize form field values before LDAP queries.",
                             cwe="CWE-90",
+                            param=param,
                         ))
                     except Exception:
                         continue

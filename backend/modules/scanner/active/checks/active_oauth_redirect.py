@@ -22,5 +22,6 @@ class ActiveOauthRedirectCheck(BaseCheck):
                         evidence=f"Parameter: {param}, Value: {params[param][0]}",
                         remediation="Strictly validate redirect_uri against a whitelist. Do not accept wildcard or open redirect patterns.",
                         cwe="CWE-601",
+                        param=param,
                     ))
         return results

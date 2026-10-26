@@ -17,7 +17,7 @@ machine as Nyx.
 import asyncio
 import logging
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 from core.config import settings
 from urllib.parse import urlparse, parse_qsl, urlencode
 
@@ -114,7 +114,7 @@ class ActiveOastCheck(BaseCheck):
 
             for param in target_params:
                 for vuln_class, payloads in _OAST_PAYLOADS.items():
-                    for template in payloads:
+                    for template in cap_payloads(payloads):
                         payload = template.format(subdomain=subdomain)
                         try:
                             await client.request(**self._inject_payload(base_request, param, payload))

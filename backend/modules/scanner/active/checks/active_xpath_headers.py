@@ -28,6 +28,7 @@ class ActiveXpathHeadersCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nResponse snippet: {resp.text[:300]}",
                                     remediation="Use parameterised XPath. Validate and sanitize all header input. Encode special characters.",
                                     cwe="CWE-643",
+                                    param=param,
                                 ))
                                 break
                     except httpx.TimeoutException:
@@ -39,6 +40,7 @@ class ActiveXpathHeadersCheck(BaseCheck):
                             evidence=f"Payload: {payload}",
                             remediation="Use parameterised XPath. Validate and sanitize all header input. Encode special characters.",
                             cwe="CWE-643",
+                            param=param,
                         ))
                     except Exception:
                         continue

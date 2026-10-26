@@ -56,6 +56,12 @@ def check_scope(url: str, rules: list[TargetScopeRule]) -> tuple[bool, str | Non
     return True, None, None
 
 
+async def is_url_in_scope(session_id, url: str) -> tuple[bool, str | None]:
+    """Async helper for callers that must decide before issuing a probe."""
+    checker = make_scope_checker(session_id)
+    return await checker(url)
+
+
 def make_scope_checker(session_id):
     from core.storage.database import AsyncSessionLocal
     from sqlalchemy import select

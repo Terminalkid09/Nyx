@@ -32,6 +32,7 @@ class ActiveJwtAlgConfusionCheck(BaseCheck):
                                 evidence=f"Payload: {jwt}\nStatus: {resp.status_code}",
                                 remediation="Enforce algorithm whitelist. Reject 'none' algorithm. Verify signature with correct key.",
                                 cwe="CWE-347",
+                                param=param,
                             ))
                     except Exception:
                         continue

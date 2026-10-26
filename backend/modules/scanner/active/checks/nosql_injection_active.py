@@ -2,7 +2,7 @@ import copy
 import json
 import re
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class NoSqlInjectionActiveCheck(BaseCheck):
@@ -17,10 +17,12 @@ class NoSqlInjectionActiveCheck(BaseCheck):
             ('$regex', '.*'),
             ('$exists', 'true'),
             ('$nin', '[]'),
+            ('$in', '["admin", "root"]'),
+            ('$or', '[{"$ne": ""}, {"$ne": ""}]'),
         ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for op, val in payloads:
+                for op, val in cap_payloads(payloads):
                     modified = copy.deepcopy(base_request)
                     body = modified.get("content", modified.get("data", "{}"))
                     try:
@@ -44,6 +46,7 @@ class NoSqlInjectionActiveCheck(BaseCheck):
                                         evidence=f"Operator: {op}\nValue: {val}\nPattern: {pattern}",
                                         remediation="Sanitize user input for MongoDB operators. Use strict schema validation.",
                                         cwe="CWE-943",
+                                        param=param,
                                     ))
                                     break
                     except Exception:

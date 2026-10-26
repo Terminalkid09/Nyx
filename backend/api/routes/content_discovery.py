@@ -28,6 +28,9 @@ class StartDiscoveryRequest(BaseModel):
     methods: list[str] = ["GET"]
     throttle_ms: int = 0
     session_id: str | None = None
+    concurrency: int = 20
+    recursive: bool = False
+    max_depth: int = 1
 
 
 class StartDiscoveryResponse(BaseModel):
@@ -77,6 +80,9 @@ async def _run_discovery_in_background(
                 methods=body.methods,
                 throttle_ms=body.throttle_ms,
                 session_id=body.session_id,
+                concurrency=body.concurrency,
+                recursive=body.recursive,
+                max_depth=body.max_depth,
             )
 
             _discovery_jobs[job_id] = {
@@ -124,6 +130,9 @@ async def start_discovery(body: StartDiscoveryRequest, request: Request, db: Asy
             "extensions": body.extensions,
             "methods": body.methods,
             "throttle_ms": body.throttle_ms,
+            "concurrency": body.concurrency,
+            "recursive": body.recursive,
+            "max_depth": body.max_depth,
         },
     )
     db.add(job)
@@ -181,6 +190,44 @@ async def stop_discovery(job_id: str, request: Request):
 async def list_wordlists(request: Request):
     service = get_discovery_service(request)
     return service.list_wordlists()
+
+
+@router.get("/wordlists/meta")
+async def wordlist_metadata(request: Request):
+    service = get_discovery_service(request)
+    return service.wordlist_metadata()
+
+
+class WordlistUploadRequest(BaseModel):
+    name: str
+    content: str
+
+
+@router.post("/wordlists/upload")
+async def upload_wordlist(body: WordlistUploadRequest, request: Request):
+    service = get_discovery_service(request)
+    result = service.save_wordlist(body.name, body.content)
+    if "error" in result:
+        raise HTTPException(400, detail=result["error"])
+    return result
+
+
+@router.get("/wordlists/{name}/preview")
+async def preview_wordlist(name: str, request: Request, limit: int = 50):
+    service = get_discovery_service(request)
+    result = service.preview_wordlist(name, limit=limit)
+    if "error" in result:
+        raise HTTPException(404, detail=result["error"])
+    return result
+
+
+@router.delete("/wordlists/{name}")
+async def delete_wordlist(name: str, request: Request):
+    service = get_discovery_service(request)
+    result = service.delete_wordlist(name)
+    if "error" in result:
+        raise HTTPException(404, detail=result["error"])
+    return result
 
 
 @router.get("/jobs")

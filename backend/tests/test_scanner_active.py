@@ -16,9 +16,9 @@ class TestActiveCheckBasics:
             lfi, xss, sqli, ssrf, xxe,
             cache_deception, cors_misconfig_active, csrf_active,
             host_header_injection, hpp, idor, jwt_none_active,
-            ldap_injection, nosqli, oauth_misconfig, open_redirect,
+            ldap_injection_active, nosqli, oauth_misconfig, open_redirect,
             parameter_pollution, race_condition, request_smuggling,
-            session_fixation, ssti, xpath_injection, xst,
+            session_fixation, ssti, xpath_injection_active, xst,
         )
         checks = [
             lfi.LfiCheck(),
@@ -33,7 +33,7 @@ class TestActiveCheckBasics:
             hpp.HppCheck(),
             idor.IdorCheck(),
             jwt_none_active.JwtNoneActiveCheck(),
-            ldap_injection.LdapInjectionCheck(),
+            ldap_injection_active.LdapInjectionActiveCheck(),
             nosqli.NoSqlInjectionCheck(),
             oauth_misconfig.OAuthMisconfigCheck(),
             open_redirect.OpenRedirectCheck(),
@@ -42,7 +42,7 @@ class TestActiveCheckBasics:
             request_smuggling.RequestSmugglingCheck(),
             session_fixation.SessionFixationCheck(),
             ssti.SstiCheck(),
-            xpath_injection.XPathInjectionCheck(),
+            xpath_injection_active.XPathInjectionActiveCheck(),
             xst.XstCheck(),
         ]
         for c in checks:
@@ -178,7 +178,9 @@ class TestSQLiCheck:
             assert results[0].severity == "high"
 
     @pytest.mark.asyncio
-    async def test_sqli_timeout_blind(self, check):
+    async def test_sqli_timeout_is_not_a_finding(self, check):
+        # A slow endpoint is not evidence of SQLi: time-blind detection lives
+        # in active_time_blind, which calibrates a baseline first.
         mock_client = AsyncMock()
         mock_client.__aenter__.return_value = mock_client
         mock_client.request.side_effect = __import__("httpx").TimeoutException(
@@ -187,8 +189,7 @@ class TestSQLiCheck:
 
         with patch("httpx.AsyncClient", return_value=mock_client):
             results = await check.run(BASE_REQUEST, ["foo"])
-            blind = [r for r in results if "blind" in r.title.lower()]
-            assert len(blind) >= 1
+            assert results == []
 
     @pytest.mark.asyncio
     async def test_no_sqli(self, check):

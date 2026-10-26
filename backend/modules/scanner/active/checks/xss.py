@@ -32,6 +32,7 @@ class XssCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Encode output based on context (HTML entity, JS string, URL encoding). Use Content-Security-Policy.",
                                 cwe="CWE-79",
+                                param=param,
                             ))
                     except Exception:
                         continue

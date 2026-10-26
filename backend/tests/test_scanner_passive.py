@@ -439,3 +439,25 @@ class TestHstsCheck:
         }
         results = await check.run(event, {})
         assert any("max-age" in r.title.lower() for r in results)
+
+
+class TestXxeSoapCheck:
+    """Regression: the CDATA pattern was an invalid regex.
+
+    ``r"<soap:Body[^>]*><![CDATA[.*<!ENTITY"`` had an unterminated character
+    set because ``[CDATA`` is not escaped; ``re.search`` raised on every SOAP
+    request that reached it and the passive scanner logged the check as failed.
+    """
+
+    async def test_cdata_entity_is_detected(self):
+        from modules.scanner.passive.checks.xxe_soap import XxeSoapCheck
+
+        body = '<soap:Body><![CDATA[<!ENTITY foo "bar">]]></soap:Body>'
+        results = await XxeSoapCheck().run({"request_body": body}, {})
+        assert results and results[0].triggered
+
+    async def test_plain_cdata_is_clean(self):
+        from modules.scanner.passive.checks.xxe_soap import XxeSoapCheck
+
+        body = "<soap:Body><![CDATA[hello]]></soap:Body>"
+        assert await XxeSoapCheck().run({"request_body": body}, {}) == []

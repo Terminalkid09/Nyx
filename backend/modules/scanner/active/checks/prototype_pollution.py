@@ -30,6 +30,7 @@ class PrototypePollutionCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Validate JSON input against a strict schema. Avoid recursive merge operations.",
                                 cwe="CWE-1321",
+                                param=param,
                             ))
                     except Exception:
                         continue

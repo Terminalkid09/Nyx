@@ -39,6 +39,7 @@ class ActiveDomXssCheck(BaseCheck):
                                 evidence=f"DOM source: {source}",
                                 remediation="Avoid writing user input directly to innerHTML, document.write, or eval. Use textContent or sanitizers.",
                                 cwe="CWE-79",
+                                param=param,
                             ))
                 except Exception:
                     continue

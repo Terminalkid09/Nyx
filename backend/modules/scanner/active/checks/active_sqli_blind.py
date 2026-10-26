@@ -12,7 +12,7 @@ import hashlib
 import httpx
 import re
 from typing import Optional
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 from urllib.parse import urlparse, parse_qsl, urlencode
 
 # Paired payloads: (TRUE, FALSE, operator)
@@ -45,7 +45,7 @@ class ActiveSqliBlindCheck(BaseCheck):
         results: list[CheckResult] = []
         async with httpx.AsyncClient(verify=False, timeout=10) as client:
             for param in target_params:
-                for true_p, false_p, operator in BLIND_PAIRS:
+                for true_p, false_p, operator in cap_payloads(BLIND_PAIRS):
                     try:
                         result = await self._test_pair(client, base_request, param, true_p, false_p, operator)
                         if result:
@@ -121,6 +121,7 @@ class ActiveSqliBlindCheck(BaseCheck):
                     "Never concatenate user input into SQL."
                 ),
                 cwe="CWE-89",
+                param=param,
             )
 
         return None

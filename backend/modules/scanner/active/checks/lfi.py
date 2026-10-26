@@ -36,6 +36,7 @@ class LfiCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Validate file paths. Avoid user input in file operations. Use a whitelist of allowed files.",
                                 cwe="CWE-98",
+                                param=param,
                             ))
                         elif "[fonts]" in body_lower or "[extensions]" in body_lower:
                             results.append(CheckResult(
@@ -46,6 +47,7 @@ class LfiCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Validate file paths. Avoid user input in file operations.",
                                 cwe="CWE-98",
+                                param=param,
                             ))
                     except Exception:
                         continue

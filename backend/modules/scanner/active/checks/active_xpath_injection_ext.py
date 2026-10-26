@@ -28,6 +28,7 @@ class ActiveXpathInjectionExtCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nResponse snippet: {resp.text[:300]}",
                                     remediation="Use parameterised XPath queries with pre-compiled expressions. Validate and sanitize all user input.",
                                     cwe="CWE-643",
+                                    param=param,
                                 ))
                                 break
                     except httpx.TimeoutException:
@@ -39,6 +40,7 @@ class ActiveXpathInjectionExtCheck(BaseCheck):
                             evidence=f"Payload: {payload}",
                             remediation="Use parameterised XPath queries with pre-compiled expressions. Validate and sanitize all user input.",
                             cwe="CWE-643",
+                            param=param,
                         ))
                     except Exception:
                         continue

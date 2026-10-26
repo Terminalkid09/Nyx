@@ -17,11 +17,16 @@ class LiveAuditService:
         self._running = False
         self._audit_log: list[dict] = []
         self._max_log_entries = 1000
+        # Engine flags as they were before Live Audit took control, restored on
+        # stop so stopping the audit does not silently disable a scan the user
+        # enabled from the Automation page.
+        self._prev_auto_active: bool | None = None
+        self._prev_param_discovery: bool | None = None
+        self._prev_enforce_scope: bool | None = None
         self._config = {
             "passive_scan": True,
             "active_scan": True,
             "param_discovery": False,
-            "fuzz_discovered": False,
             "max_concurrent_audits": 5,
             "scope_only": True,
             "throttle_ms": 200,
@@ -50,9 +55,12 @@ class LiveAuditService:
         # the PassiveScanner runs exactly once via its own bus subscription,
         # so re-running checks here would only duplicate work.
         self.event_bus.subscribe("finding.created", self._on_finding_created)
+        self.event_bus.subscribe("automation.scan_started", self._on_scan_started)
+        self.event_bus.subscribe("automation.scan_completed", self._on_scan_completed)
 
         if self.auto_scan_engine:
             self.auto_scan_engine._running = True
+            self._take_engine_control()
 
         logger.info("Live Audit started")
         await self.event_bus.publish({
@@ -68,6 +76,9 @@ class LiveAuditService:
         self.event_bus.unsubscribe("request.captured", self._on_request)
         self.event_bus.unsubscribe("response.received", self._on_response)
         self.event_bus.unsubscribe("finding.created", self._on_finding_created)
+        self.event_bus.unsubscribe("automation.scan_started", self._on_scan_started)
+        self.event_bus.unsubscribe("automation.scan_completed", self._on_scan_completed)
+        self._restore_engine_flags()
         logger.info("Live Audit stopped: %s findings from %s requests",
                     self._stats["passive_findings"] + self._stats["active_findings"],
                     self._stats["requests_analyzed"])
@@ -126,10 +137,49 @@ class LiveAuditService:
             "recent_log": self._audit_log[-20:] if self._audit_log else [],
         }
 
+    def _take_engine_control(self) -> None:
+        """Apply the toggles to the auto-scan engine (they used to be inert)."""
+        engine = self.auto_scan_engine
+        if not engine:
+            return
+        if self._prev_auto_active is None:
+            self._prev_auto_active = getattr(engine, "auto_active_scan", False)
+        if self._prev_param_discovery is None:
+            self._prev_param_discovery = getattr(engine, "auto_param_discovery", False)
+        if self._prev_enforce_scope is None:
+            self._prev_enforce_scope = getattr(engine, "enforce_scope", True)
+        engine.auto_active_scan = bool(self._config["active_scan"])
+        engine.auto_param_discovery = bool(self._config["param_discovery"])
+        engine.enforce_scope = bool(self._config["scope_only"])
+
+    def _restore_engine_flags(self) -> None:
+        engine = self.auto_scan_engine
+        if not engine:
+            return
+        if self._prev_auto_active is not None:
+            engine.auto_active_scan = self._prev_auto_active
+        if self._prev_param_discovery is not None:
+            engine.auto_param_discovery = self._prev_param_discovery
+        if self._prev_enforce_scope is not None:
+            engine.enforce_scope = self._prev_enforce_scope
+        self._prev_auto_active = None
+        self._prev_param_discovery = None
+        self._prev_enforce_scope = None
+
+    async def _on_scan_started(self, event: dict) -> None:
+        if self._running:
+            self._stats["active_scans_queued"] += 1
+
+    async def _on_scan_completed(self, event: dict) -> None:
+        if self._running:
+            self._stats["active_scans_completed"] += 1
+
     def update_config(self, config: dict) -> dict:
         for key, value in config.items():
             if key in self._config:
                 self._config[key] = value
+        if self._running:
+            self._take_engine_control()
         return self._config
 
     def get_config(self) -> dict:

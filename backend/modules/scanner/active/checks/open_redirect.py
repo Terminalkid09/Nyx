@@ -34,6 +34,7 @@ class OpenRedirectCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nLocation: {location}",
                                 remediation="Validate and whitelist redirect destinations.",
                                 cwe="CWE-601",
+                                param=param,
                             ))
                     except Exception:
                         continue

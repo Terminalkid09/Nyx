@@ -1,5 +1,5 @@
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 from urllib.parse import urlparse, parse_qsl, urlencode
 
 
@@ -24,7 +24,7 @@ class ActiveSstiBlindCheck(BaseCheck):
         results = []
         async with httpx.AsyncClient(verify=False, timeout=15) as client:
             for param in target_params:
-                for engine_name, payload in BLIND_SSTI_PAYLOADS:
+                for engine_name, payload in cap_payloads(BLIND_SSTI_PAYLOADS):
                     modified = dict(base_request)
                     parsed = urlparse(modified["url"])
                     params = dict(parse_qsl(parsed.query))
@@ -42,6 +42,7 @@ class ActiveSstiBlindCheck(BaseCheck):
                                     evidence=f"Engine: {engine_name}\nPayload: {payload}\nIndicator: {indicator}",
                                     remediation="Do not render user input as templates. Use sandboxed template engines if necessary.",
                                     cwe="CWE-94",
+                                    param=param,
                                 ))
                                 break
                     except Exception:

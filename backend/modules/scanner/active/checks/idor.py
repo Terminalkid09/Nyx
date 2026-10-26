@@ -98,6 +98,7 @@ class IdorCheck(BaseCheck):
                                         "object references. Do not rely on hidden or obfuscated IDs."
                                     ),
                                     cwe="CWE-639",
+                                    param=param,
                                 ))
                                 break
                 except Exception:
@@ -171,6 +172,7 @@ class IdorCheck(BaseCheck):
                 "Use opaque, non-guessable identifiers (UUIDs v4) as an additional defence-in-depth measure."
             ),
             cwe="CWE-639",
+            param=param,
         )
 
     # ── URL / param helpers ───────────────────────────────────────────────

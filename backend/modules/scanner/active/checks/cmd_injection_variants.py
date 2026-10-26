@@ -38,6 +38,7 @@ class CmdInjectionVariantsCheck(BaseCheck):
                             evidence=f"Payload: {payload}",
                             remediation="Avoid shell execution with user input. Use safe APIs.",
                             cwe="CWE-78",
+                            param=param,
                         ))
                     except Exception:
                         continue
