@@ -766,6 +766,25 @@ Exit codes: `0` clean at/above threshold, `1` threshold met, `2` error.
 Useful flags: `--params id,user_id`, `--checks active_sqli,active_xss`,
 `--depth fast|balanced|deep`, `--timeout 600`.
 
+### Import an API description
+
+An OpenAPI 2.0/3.x document (JSON or YAML) becomes an endpoint inventory
+without a single request being sent:
+
+```bash
+cd backend
+python nyx_cli.py import openapi spec.yaml --out inventory.json
+python nyx_cli.py import openapi spec.yaml --fail-on medium   # CI gate on warnings
+```
+
+The same inventory is available over HTTP with `POST /api/import/openapi`
+(`{"document": "<spec text>", "session_id": "<uuid>", "apply_scope": true}`).
+With `apply_scope` each server declared by the document becomes an `include`
+rule in that session, so later probes pass the scope/RoE gate instead of being
+refused. The payload also carries **contract warnings** — operations without a
+security requirement, plaintext servers, parameters without a schema type,
+deprecated operations — so a CI job can fail on them.
+
 ### Prometheus Metrics
 
 Nyx exposes a `/metrics` endpoint in Prometheus text format:

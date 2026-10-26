@@ -159,6 +159,65 @@ async def _scan(args) -> int:
     return 0 if summary["passed"] else 1
 
 
+def _import_openapi(args) -> int:
+    """Turn an OpenAPI document into an inventory without touching the target.
+
+    Nothing is sent, so this runs offline; the exit code reports the contract
+    warnings when ``--fail-on`` is given, which is what a CI job wants.
+    """
+    from modules.importer.openapi import OpenAPIImportError, inventory, parse_document
+
+    try:
+        with open(args.path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        document = parse_document(text)
+    except OpenAPIImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    report = inventory(document)
+    payload = json.dumps(report, indent=2, default=str)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+
+    if args.json:
+        print(payload)
+    else:
+        print(
+            f"{report['spec']['title']} {report['spec']['api_version']} "
+            f"({report['spec']['version']}): {report['endpoint_count']} operations"
+        )
+        for method, count in sorted(report["method_counts"].items()):
+            print(f"  {method.upper():6} {count}")
+        print(f"{len(report['warnings'])} contract warnings")
+        for warning in report["warnings"][:20]:
+            print(
+                f"  {warning['severity']:6} {warning['code']}: {warning['message']}"
+            )
+        if args.out:
+            print(f"inventory -> {args.out}")
+
+    if args.fail_on != "none":
+        failing = [
+            warning
+            for warning in report["warnings"]
+            if severity_at_least(warning["severity"], args.fail_on)
+        ]
+        if failing:
+            print(
+                f"error: {len(failing)} contract warnings at/above {args.fail_on}",
+                file=sys.stderr,
+            )
+            return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nyx", description="Nyx headless scanner")
     parser.add_argument("--version", action="version", version="Nyx CLI 1.1.0")
@@ -181,6 +240,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=SEVERITY_ORDER, help="lowest severity that makes the command exit 1",
     )
     scan.add_argument("--out", default=None, help="write the JSON report here")
+
+    importer = sub.add_parser(
+        "import", help="build an endpoint inventory from an API description"
+    )
+    formats = importer.add_subparsers(dest="format", required=True)
+    openapi = formats.add_parser("openapi", help="OpenAPI 2.0 / 3.x, JSON or YAML")
+    openapi.add_argument("path", help="path to the document")
+    openapi.add_argument("--json", action="store_true", help="print the whole inventory")
+    openapi.add_argument("--out", default=None, help="write the inventory JSON here")
+    openapi.add_argument(
+        "--fail-on",
+        default="none",
+        choices=["none", *SEVERITY_ORDER],
+        help="exit 1 when a contract warning reaches this severity",
+    )
     return parser
 
 
@@ -193,6 +267,8 @@ def main(argv=None) -> int:
         except Exception as exc:  # noqa: BLE001 — CLI boundary: report, don't traceback
             print(f"error: {exc}", file=sys.stderr)
             return 2
+    if args.command == "import":
+        return _import_openapi(args)
     parser.error("unknown command")
     return 2
 

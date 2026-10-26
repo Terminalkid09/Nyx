@@ -451,6 +451,7 @@ from api.routes.websocket_intercept import router as websocket_intercept_router
 from api.routes.attack_path import router as attack_path_router
 from api.routes.roe import router as roe_router
 from api.routes.verifier import router as verifier_router
+from api.routes.imports import router as imports_router
 from api.routes.projects import router as projects_router
 from api.routes.scan_jobs import router as scan_jobs_router
 from api.routes.automation import router as automation_router
@@ -511,6 +512,7 @@ app.include_router(websocket_intercept_router)
 app.include_router(attack_path_router)
 app.include_router(roe_router)
 app.include_router(verifier_router)
+app.include_router(imports_router)
 app.include_router(projects_router)
 app.include_router(scan_jobs_router)
 app.include_router(automation_router)
