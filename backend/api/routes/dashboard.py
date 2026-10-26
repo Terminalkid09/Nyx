@@ -103,9 +103,12 @@ async def get_dashboard_stats(
             "target": job.target_url or "",
             "status": job.status or "unknown",
             "progress": job.progress or 0,
-            "total_checks": job.total_checks or 0,
-            "passed_checks": job.passed_checks or 0,
-            "failed_checks": job.failed_checks or 0,
+            # ScanJob stores task counters, not per-check pass/fail. Reading
+            # non-existent attributes crashed the whole dashboard as soon as
+            # one scan job existed in the database.
+            "total_checks": job.total_tasks or 0,
+            "passed_checks": job.completed_tasks or 0,
+            "failed_checks": 0,
             "created_at": job.created_at.isoformat() if job.created_at else "",
         }
         for job in scan_result.scalars().all()

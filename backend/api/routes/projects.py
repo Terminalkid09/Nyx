@@ -300,6 +300,14 @@ async def import_project(body: dict, db: AsyncSession = Depends(get_db)):
             cookie = CookieJar(session_id=session_id, **cookie_data)
             db.add(cookie)
 
+    if session_id is None:
+        # A project row is NOT NULL on session_id. An export without session
+        # data (or a partial import) used to raise IntegrityError -> 500.
+        session = Session(name="Imported Session", scope=[])
+        db.add(session)
+        await db.flush()
+        session_id = session.id
+
     project = Project(
         name=project_data.get("name", "Imported Project"),
         description=project_data.get("description"),

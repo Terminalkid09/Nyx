@@ -14,7 +14,13 @@ class StartPipelineRequest(BaseModel):
 
 def get_pipeline(request: Request) -> ScanPipeline:
     if not hasattr(request.app.state, 'pipeline_service'):
-        request.app.state.pipeline_service = ScanPipeline(request.app.state.event_bus)
+        # Without the lifespan-provided event bus there is nothing to run a
+        # pipeline on; answer 503 instead of raising AttributeError (a bare
+        # 500 that hides the real cause from the UI and from tests).
+        event_bus = getattr(request.app.state, 'event_bus', None)
+        if event_bus is None:
+            raise HTTPException(503, detail="Pipeline service not available")
+        request.app.state.pipeline_service = ScanPipeline(event_bus)
     return request.app.state.pipeline_service
 
 

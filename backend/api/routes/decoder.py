@@ -135,13 +135,15 @@ async def jwt_decode(body: JwtDecodeRequest):
 
 @router.post("/html-encode")
 async def html_encode(body: HtmlEncodeRequest):
+    # Validate before the broad except: an HTTPException raised inside the try
+    # was caught by ``except Exception`` and returned as a 500.
+    if body.mode not in ("encode", "decode"):
+        raise HTTPException(400, detail="mode must be 'encode' or 'decode'")
     try:
         if body.mode == "encode":
             output = decoder_service.html_encode_full(body.input)
-        elif body.mode == "decode":
-            output = decoder_service.html_decode_full(body.input)
         else:
-            raise HTTPException(400, detail="mode must be 'encode' or 'decode'")
+            output = decoder_service.html_decode_full(body.input)
         return {"input": body.input, "mode": body.mode, "output": output}
     except Exception as e:
         raise HTTPException(500, detail=str(e))

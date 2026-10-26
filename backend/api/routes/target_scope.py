@@ -1,5 +1,7 @@
 import re
 import uuid
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -45,7 +47,9 @@ class RuleResponse(BaseModel):
     match_domain: bool
     protocols: list
     order: int
-    created_at: str
+    # The ORM column is a datetime; declaring it as ``str`` made FastAPI raise
+    # ResponseValidationError (500) as soon as a rule actually existed.
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

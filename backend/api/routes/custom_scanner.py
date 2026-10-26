@@ -1,5 +1,7 @@
 import uuid
 import re
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -41,7 +43,8 @@ class CheckResponse(BaseModel):
     match_pattern: str
     is_regex: bool
     payload: str | None
-    created_at: str
+    # ORM datetime, not str: see target_scope.RuleResponse.
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
