@@ -43,6 +43,11 @@ class EventBus:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=5.0)
                 acquired = True
             except asyncio.TimeoutError:
+                # Dropping a handler means lost findings/traffic. The counter is
+                # scraped from /metrics so the loss is observable instead of
+                # only appearing in a warning line (BUG-11).
+                from core.metrics import registry as _metrics
+                _metrics.inc("events_dropped_total")
                 self._logger.warning(
                     "EventBus saturated — dropping handler for event %s",
                     event.get("type"),

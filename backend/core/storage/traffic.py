@@ -75,16 +75,20 @@ class TrafficStorageService:
                 count = count_result.scalar() or 0
                 excess = count - max_req
                 if excess > 0:
-                    # Find the timestamp of the Nth-oldest request and delete
-                    # everything older than that, plus a small margin
+                    # Keep the ``max_req`` most recent requests. Request.id is a
+                    # random uuid4, so ordering by id deleted an arbitrary half
+                    # of the history (and cascaded into websocket_messages).
+                    # Order by timestamp instead: the Nth-newest timestamp is
+                    # the cutoff, and everything strictly older goes.
                     cutoff_result = await db.execute(
-                        select(Request.id).order_by(Request.id.asc())
-                        .offset(excess).limit(1)
+                        select(Request.timestamp)
+                        .order_by(Request.timestamp.desc())
+                        .offset(max_req - 1).limit(1)
                     )
-                    cutoff_id = cutoff_result.scalar()
-                    if cutoff_id:
+                    cutoff_ts = cutoff_result.scalar()
+                    if cutoff_ts is not None:
                         result = await db.execute(
-                            delete(Request).where(Request.id < cutoff_id)
+                            delete(Request).where(Request.timestamp < cutoff_ts)
                         )
                         deleted += result.rowcount
             if max_hours > 0:
