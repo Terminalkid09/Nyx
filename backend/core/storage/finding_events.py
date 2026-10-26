@@ -3,6 +3,7 @@ import uuid
 
 from core.events.bus import EventBus
 from core.storage.database import AsyncSessionLocal
+from core.storage.evidence import build_evidence
 from core.storage.models import Finding, SeverityEnum
 from core.storage.traffic import DEFAULT_SESSION_ID
 
@@ -23,6 +24,10 @@ async def persist_results(event_bus: EventBus, results: list, event: dict, modul
     except ValueError:
         request_id = None
     async with AsyncSessionLocal() as db:
+        # Stage every finding first, commit once, and only then announce them.
+        # Publishing before the commit let subscribers (live-audit stats, the UI,
+        # automations) read a finding_id that a concurrent rollback would erase.
+        created: list[dict] = []
         for result in results:
             if not result.triggered:
                 continue
@@ -30,15 +35,23 @@ async def persist_results(event_bus: EventBus, results: list, event: dict, modul
             finding = Finding(
                 session_id=session_id, request_id=request_id, module=module,
                 severity=severity, title=result.title, description=result.description,
-                evidence=result.evidence, remediation=result.remediation, cwe=result.cwe,
+                evidence=build_evidence(result, event), remediation=result.remediation, cwe=result.cwe,
                 cvss_score=getattr(result, 'cvss_score', None),
                 cvss_vector=getattr(result, 'cvss_vector', None)
             )
             db.add(finding)
             await db.flush()
-            await event_bus.publish({"type": "finding.created", "id": str(finding.id),
-                "session_id": str(session_id), "request_id": str(request_id) if request_id else None,
-                "module": module, "source": source, "severity": severity.value, "title": finding.title,
-                "description": finding.description, "evidence": finding.evidence,
-                "cwe": finding.cwe, "cvss_score": finding.cvss_score, "cvss_vector": finding.cvss_vector})
+            # Snapshot the columns before commit: expire_on_commit would make
+            # every attribute access below a lazy load.
+            created.append({
+                "id": str(finding.id), "session_id": str(session_id),
+                "request_id": str(request_id) if request_id else None,
+                "module": module, "source": source, "severity": severity.value,
+                "title": finding.title, "description": finding.description,
+                "evidence": finding.evidence, "cwe": finding.cwe,
+                "cvss_score": finding.cvss_score, "cvss_vector": finding.cvss_vector,
+            })
         await db.commit()
+
+    for payload in created:
+        await event_bus.publish({"type": "finding.created", **payload})
