@@ -29,7 +29,7 @@ jobs:
                            tests/test_content_discovery.py \
                            tests/test_auto_exploit.py \
                            tests/test_recommender.py \
-                           -q --timeout=60 -x --asyncio-mode=auto \
+                           -q --timeout=60 -x \
                            --tb=short
         env:
           PYTHONPATH: backend
@@ -50,7 +50,7 @@ jobs:
 
       - name: Run full backend test suite
         working-directory: .
-        run: python -m pytest backend/tests -q --asyncio-mode=auto --tb=short
+        run: python -m pytest backend/tests -q --tb=short
         env:
           PYTHONPATH: backend
 
@@ -138,3 +138,11 @@ jobs:
       - name: Verify electron-builder is available
         working-directory: desktop
         run: npx electron-builder --help > /dev/null 2>&1 && echo "electron-builder OK"
+
+      - name: Syntax check Electron entry points
+        working-directory: desktop
+        run: |
+          node --check main.js
+          node --check preload.js
+          node --check browser-preload.js
+          node --check browser-renderer.js
