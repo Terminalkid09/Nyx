@@ -3,7 +3,7 @@ import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
     String, Text, Integer, Boolean, DateTime, ForeignKey,
-    Enum, Index, JSON, LargeBinary, Uuid
+    Enum, Index, JSON, LargeBinary, Uuid, Float
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -116,6 +116,30 @@ class Finding(Base):
     )
 
 
+class AuthorizationProfile(Base):
+    """Signed Rules-of-Engagement profile (F-01).
+
+    Active probing is only allowed when an active profile matches the target
+    host, does not exclude it, and the current time is inside the engagement
+    window. The signature covers every field an operator could edit, so a
+    database tamper is detectable. No active profiles means "no RoE configured"
+    (allow), which keeps the desktop workflow unchanged; an active profile with
+    an empty target list authorizes nothing.
+    """
+    __tablename__ = "authorization_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    targets: Mapped[list] = mapped_column(JSON, default=list)
+    exclusions: Mapped[list] = mapped_column(JSON, default=list)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    max_rps: Mapped[float] = mapped_column(Float, default=0.0)
+    signature: Mapped[str] = mapped_column(String(128), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class MatchReplaceRule(Base):
     __tablename__ = "match_replace_rules"
 
@@ -150,7 +174,41 @@ class FuzzJob(Base):
     total_requests: Mapped[int] = mapped_column(Integer, default=0)
     completed_requests: Mapped[int] = mapped_column(Integer, default=0)
     rate_limit_rps: Mapped[int] = mapped_column(Integer, default=10)
+    # Legacy: results used to live in this JSON column. New jobs write one row
+    # per payload to ``fuzz_results`` (BUG-04 fase B) and this stays empty; it
+    # is kept so old jobs remain readable through the results endpoint.
     results: Mapped[dict] = mapped_column(JSON, default=list)
+
+
+class FuzzResult(Base):
+    """One fuzzer payload/response pair (BUG-04 fase B).
+
+    Storing each result as its own row keeps the job row small, lets the UI
+    page through results, and stops a 100k-payload run from writing a single
+    multi-hundred-MB JSON blob. Bodies are truncated before the insert.
+    """
+
+    __tablename__ = "fuzz_results"
+    __table_args__ = (Index("ix_fuzz_results_job_seq", "job_id", "seq"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("fuzz_jobs.id", ondelete="CASCADE"))
+    # Order of arrival within the job; the UI sorts by it when not sorting by
+    # a column of its own.
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[int | None] = mapped_column(Integer)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    time_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    waf_detected: Mapped[str | None] = mapped_column(String(64))
+    grep_results: Mapped[dict] = mapped_column(JSON, default=dict)
+    extracted: Mapped[dict] = mapped_column(JSON, default=dict)
+    request: Mapped[str | None] = mapped_column(Text)
+    response: Mapped[str | None] = mapped_column(Text)
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class CollaboratorInteraction(Base):

@@ -344,7 +344,11 @@ import signal as _signal
 # without poking the live handler registry (pytest owns SIGINT too).
 _SIGNAL_HANDLERS_REGISTERED: list[str] = []
 
-_atexit.register(_emergency_cleanup)
+# The test suite imports this module, so the *implicit* atexit cleanup used to
+# clear the developer's Windows system proxy on every pytest run. Tests set
+# NYX_SKIP_OS_CLEANUP; explicit calls (shutdown API, signal handler) still run.
+if not os.environ.get("NYX_SKIP_OS_CLEANUP"):
+    _atexit.register(_emergency_cleanup)
 for _sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
     _sig = getattr(_signal, _sig_name, None)
     if _sig is not None:
@@ -444,7 +448,9 @@ from api.routes.comparer import router as comparer_router
 from api.routes.search import router as search_router
 from api.routes.auth_testing import router as auth_testing_router
 from api.routes.websocket_intercept import router as websocket_intercept_router
-from api.routes.plugins import router as plugins_router
+from api.routes.attack_path import router as attack_path_router
+from api.routes.roe import router as roe_router
+from api.routes.verifier import router as verifier_router
 from api.routes.projects import router as projects_router
 from api.routes.scan_jobs import router as scan_jobs_router
 from api.routes.automation import router as automation_router
@@ -502,7 +508,9 @@ app.include_router(comparer_router)
 app.include_router(search_router)
 app.include_router(auth_testing_router)
 app.include_router(websocket_intercept_router)
-app.include_router(plugins_router)
+app.include_router(attack_path_router)
+app.include_router(roe_router)
+app.include_router(verifier_router)
 app.include_router(projects_router)
 app.include_router(scan_jobs_router)
 app.include_router(automation_router)
