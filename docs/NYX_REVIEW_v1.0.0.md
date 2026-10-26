@@ -23,7 +23,7 @@ Legenda: **FATTO** = codice + test verdi; **PARZIALE** = nucleo implementato, UI
 | v1.1 P1 | SEC-03a (Host allowlist, `Sec-Fetch-Site`), SEC-04 (escaping Fuzzer), SEC-05 (plugin rimossi), SEC-06 (README/threat model onesti), SEC-07 (Docker: proxy fidato, WS porta 80, `npm ci` + `.npmrc`) | FATTO |
 | v1.1 bug | BUG-01 (retention per timestamp), BUG-02 (dedupe per parametro), BUG-03+16 (toggle Live Audit, sessione corretta), BUG-04 fase A (worker pool, client condiviso, cap/troncamento), BUG-05 (publish dopo commit), BUG-08 (path DB assoluto), BUG-09 (TTL flow in pausa), BUG-10 (noise domini configurabili + metrica), BUG-11 (`events_dropped_total`), BUG-12, BUG-13, BUG-14 (icacls), BUG-15 (quoting PRAGMA key) | FATTO |
 | v1.2 | BUG-06 (scope+RoE come barriera in scanner, auto-scan e **fuzzer**; `session_id` passato da Auth Scan e Pipeline), BUG-07 (timeout per check), F-02 (CLI `nyx_cli.py scan --fail-on`), evidence (curl + estratto risposta) | FATTO |
-| v1.2 residuo | SEC-03b (token per-boot via IPC), split `mitm.py`, registry automatico dei check | APERTO |
+| v1.2 residuo | SEC-03b (token per-boot via IPC), split `mitm.py` (`mitm_admin`/`mitm_status`), registry automatico dei check attivi | FATTO |
 | v1.2 | BUG-04 fase B (tabella `fuzz_results`, scrittura a batch, endpoint con paging, cleanup di sessione) | FATTO |
 | Sessione 24/10 (2) | Endpoint privilegiati provati live (MITM/capture/CA/export) + CA rimozione verificata + `attack-path` limitato | Vedi §0.2 |
 | v1.3 | F-01 (profili RoE firmati, matcher, rate gate, API, pagina RoE), F-03 (attack path graph + `/api/attack-path/{session_id}` + vista grafo), F-04 (verifier differenziale + endpoint + pagina Verifier) | FATTO (nucleo + UI) |
@@ -100,9 +100,8 @@ installa mai da sola; la UI ora mostra lo stato di fiducia per store e la
 rimozione verificata. Resta separato il trust di Firefox (store NSS) e dei
 keystore Java: dichiarati, non toccati.
 
-**Resta aperto**: SEC-03b (token per-boot via IPC), split di `mitm.py`, UI per
-RoE/verifier/attack-path, import OpenAPI/Burp, multi-ruolo A/B, report NIS2, AP
-range multi-BSSID (vedi §14). Il crash del backend osservato con Electron
+**Resta aperto**: UI per RoE/verifier/attack-path, import Burp/ZAP, UI del
+multi-ruolo A/B, AP range multi-BSSID (vedi §14). Il crash del backend osservato con Electron
 durante gli sweep era BUG-21 (endpoint `settings/proxy`) più BUG-25
 (`attack-path`) sul database di lavoro.
 
@@ -355,6 +354,21 @@ Il modello "localhost = fidato" è lo stesso di Burp, ed è **accettabile come d
 - Rifiutare `Sec-Fetch-Site: cross-site`.
 - Generare un token per-boot, consegnato al renderer via IPC (l'infrastruttura esiste già: `nyxDesktop.getApiKey`).
 - Non restituire la key da `/api/auth/key` se `Sec-Fetch-Site` è presente (i.e. richiesta da browser).
+
+**Stato (SEC-03a + SEC-03b)**: tutti e quattro i punti sono implementati.
+`API_REQUIRE_SESSION_TOKEN` (alzato dalla shell Electron solo nelle build
+pacchettizzate) fa sì che anche un chiamante loopback debba presentare
+`X-Nyx-Token`: il backend genera il token all'avvio, lo scrive in
+`NYX_HOME/session.token` con permessi del solo owner (riusa `restrict_to_owner`,
+quindi `icacls` su Windows) e lo rigenera a ogni boot, così non è riutilizzabile
+dopo un riavvio né leggibile da un altro account. Il main process lo rilegge da
+disco a ogni richiesta e lo passa al renderer via `nyxDesktop.getSessionToken`;
+`frontend/src/api/client.ts` lo allega a ogni chiamata, invalida la cache su un
+403 con quel detail e ritenta una volta (riavvio del backend). Restano esenti
+token e API key solo le rotte che un browser semplice deve aprire: portale MITM
+e download/rimozione della CA. Test: `tests/test_api_auth.py`
+(403 senza/con token errato, 200 col token, gate spento di default, file
+persistito).
 
 ### SEC-04 — HTML del target renderizzato come markup nel Fuzzer
 
@@ -672,7 +686,7 @@ Obiettivo: chiudere i P0 e i P1 che bloccano una release credibile. **Un ticket 
 **CL**
 - [ ] SEC-01 command injection WiFi AP + test (2-3 h)
 - [ ] SEC-02 path traversal report + test (1 h)
-- [ ] SEC-03 auth hardening: Host/`Sec-Fetch-Site`/token per-boot (4-6 h)
+- [x] SEC-03 auth hardening: Host/`Sec-Fetch-Site`/token per-boot (4-6 h)
 - [ ] BUG-01 janitor per timestamp + test (2 h)
 - [ ] SEC-04 escaping Fuzzer (1 h)
 - [ ] SEC-06 allineare README/threat model alla realtà encryption (2 h)
@@ -800,7 +814,7 @@ curl -s 'http://127.0.0.1:8000/api/automations/reports/..%2F..%2Fpackage.json'
 
 - [ ] SEC-01: SSID/passphrase validati, `shell=False`, test di injection verdi
 - [ ] SEC-02: `resolve()` + `relative_to()` + `name` check, test traversal verdi
-- [ ] SEC-03: Host/Origin/Sec-Fetch-Site validati; `/api/auth/key` non risponde a richieste browser
+- [x] SEC-03: Host/Origin/Sec-Fetch-Site validati; `/api/auth/key` non risponde a richieste browser; token per-boot in build pacchettizzata
 - [ ] SEC-04: escaping prima del replace nel Fuzzer
 - [ ] SEC-06: README e threat model coerenti con l'implementazione reale
 - [ ] SEC-07: `docker compose up` → dashboard carica dati e WebSocket connesso
