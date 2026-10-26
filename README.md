@@ -14,7 +14,8 @@
   <a href="#desktop-app">Desktop App</a> •
   <a href="#building-from-source">Building</a> •
   <a href="#documentation">Documentation</a> •
-  <a href="#license">License</a>
+  <a href="#license">License</a> •
+  <a href="SECURITY.md">Security</a>
 </p>
 
 <p align="center">
@@ -47,8 +48,8 @@
 | **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
 | **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
-| **Security Hardening** | SQLCipher AES-256 encryption at-rest, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail |
-| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 620+ tests, CI/CD pipeline, Electron code signing |
+| **Security Hardening** | Host/Origin validation, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail; **optional** SQLCipher AES-256 encryption at-rest (off by default — the SQLite file is plaintext unless `NYX_SQLCIPHER_KEY` is set) |
+| **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 900+ tests, CI/CD pipeline, Electron code signing |
 
 Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
 
@@ -72,11 +73,11 @@ Nyx is an open-source web security testing platform. It provides traffic interce
 | Module | Description |
 |--------|-------------|
 | **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities + Wappalyzer-style tech fingerprinting + info disclosure (credit cards, SSN, API keys) |
-| **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more — with boolean-blind SQLi, time-based blind detection, context-aware XSS, and OAST |
+| **Active Scanner** | 138 active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more — with boolean-blind SQLi, time-based blind detection, context-aware XSS, and OAST. Checks run concurrently, deduplicated per parameter, and every probe passes the scope/RoE gate and its rate cap |
 | **Scan Depth Profiles** | `fast` / `balanced` / `deep` — control scanner intensity (payload counts, blind/time/OAST checks) via `GET /api/active-scanner/depths` |
 | **Smart IDOR Check** | JSON-aware IDOR detection that compares schema vs values (cross-account data access) to eliminate false positives |
 | **Custom Checks** | User-defined regex/string checks with severity, run against captured requests |
-| **Content Discovery** | Directory/file brute-forcing with wildcard/catch-all baseline filtering & auto-finding for sensitive files (`.env`, `.bak`) |
+| **Content Discovery** | Concurrent directory/file brute-forcing with soft-404 body-similarity filtering, optional recursion, and auto-finding for sensitive files (`.env`, `.bak`) |
 | **Crawler** | JS-aware autonomous spidering via Playwright (headless Chromium) |
 | **Collaborator (OAST)** | Self-hosted out-of-band server (Go) — detects blind XXE, blind SSRF, DNS exfiltration via DNS/HTTP interactions with webhook forwarding |
 | **Live Audit** | Continuous passive analysis of all proxied traffic |
@@ -226,7 +227,7 @@ Brute-force directories and files on a target using customizable wordlists.
 2. Select wordlist, extensions (`.php`, `.bak`, `.json`), methods, throttle
 3. Click **Start** → results with status codes and timings
 
-**Built-in wordlists:** Common dirs, files, API endpoints.
+**Built-in wordlists:** SecLists-derived dirs (~20k), files (~11k), common (~4.7k), API endpoints, parameter names (~6.4k) and a curated backup/secret list, plus a quick list for the pipeline. Import your own from the UI/API (`POST /api/content-discovery/wordlists/upload`) and manage them with `GET /wordlists/meta`, `GET /wordlists/{name}/preview`, `DELETE /wordlists/{name}`.
 
 ---
 
@@ -534,14 +535,18 @@ npm run dev
 ### Quality gates
 
 ```bash
-# Backend tests (576 tests)
-cd backend && python -m pytest tests -q --asyncio-mode=auto
+# Backend (pytest.ini sets asyncio_mode=auto: no CLI flag needed)
+cd backend && python -m pytest -q
 
-# Frontend: type check, lint, unit tests
+# Legacy unit suites (hermetic DB via tests/conftest.py)
+PYTHONPATH=backend python -m pytest tests -q
+
+# Frontend: type check, lint, unit tests, bundle
 cd frontend
 npm run type-check
 npm run lint        # errors fail; warnings are tracked debt
 npm test
+npm run build
 ```
 
 ---
@@ -689,7 +694,7 @@ The installer will be generated in `desktop/dist/`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite+aiosqlite:///nyx.db` | Database connection string (use `postgresql+asyncpg://...` for PostgreSQL) |
+| `DATABASE_URL` | absolute `sqlite+aiosqlite:///…/nyx.db` | Database connection string. The SQLite path is anchored (`NYX_HOME`, then an existing DB, then the project root), so it no longer depends on the process CWD. Use `postgresql+asyncpg://...` for PostgreSQL |
 | `SECRET_KEY` | auto-generated | Backend secret key for sessions |
 | `DEBUG` | `false` | Enable debug logging |
 | `PROXY_HOST` | `127.0.0.1` | Proxy listen address |
@@ -699,7 +704,11 @@ The installer will be generated in `desktop/dist/`.
 | `MAX_BODY_SIZE_BYTES` | `10485760` | Max request/response body size (10 MB) |
 | `MAX_STORED_REQUESTS` | `100000` | Max intercepted requests kept in DB (0 = unlimited) |
 | `REQUEST_RETENTION_HOURS` | `168` | Hours to keep intercepted requests (7 days) |
-| `NYX_SQLCIPHER_KEY` | *(empty)* | Set to enable SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`) |
+| `NYX_SQLCIPHER_KEY` | *(empty)* | Opt-in SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`). Empty means the database is stored **in clear** |
+| `API_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra Host header names accepted by the API (loopback plus `test`/`testserver` are always allowed) |
+| `TRUSTED_PROXY_CIDRS` | *(empty)* | Comma-separated reverse-proxy networks allowed to call the API without `X-API-Key` (set by `docker-compose.yml`) |
+| `INTERCEPTOR_PAUSE_TTL_SECONDS` | `120` | Auto-resume a paused intercepted flow after this many seconds (0 disables) |
+| `PROXY_NOISE_DOMAINS` | *(empty)* | Comma-separated override of the built-in noise-host list the proxy drops (health checks, OCSP, …) |
 | `LOG_FORMAT` | `text` | Set to `json` for structured JSON logging (useful for ELK/Grafana) |
 
 ### Compliance Reports
@@ -723,16 +732,39 @@ GET /api/compliance/full
 GET /api/compliance/status
 ```
 
-### SQLCipher Encryption at-Rest
+### Encryption at-Rest (SQLCipher, opt-in)
 
-Enable AES-256-CBC encryption for the database:
+**Default: the database is NOT encrypted.** `nyx.db` is a plain SQLite file. It
+contains intercepted traffic, including cookies and credentials in request and
+response **bodies** — header redaction covers header names only, it cannot
+redact secrets inside a JSON body or a form post. Use full-disk encryption
+(BitLocker/FileVault) or opt into SQLCipher:
 
 ```bash
 pip install pysqlcipher3
 export NYX_SQLCIPHER_KEY="your-strong-password"
 ```
 
-The database file (`nyx.db`) is encrypted with the key. Without the key, the file is unreadable. Recommended for: production deployments, compliance (PCI-DSS §3.4, GDPR Art. 32), and shared environments.
+With the key set and `pysqlcipher3` installed, the database is encrypted with
+AES-256-CBC and is unreadable without the key. If the key is set but the driver
+is missing, Nyx logs a warning and **falls back to plaintext** — check the
+startup log before trusting the file. Recommended for: shared machines,
+compliance (PCI-DSS §3.4, GDPR Art. 32), and production deployments.
+
+### Headless CLI (CI)
+
+Run the active checks without the UI, write a JSON report and fail the build
+when a finding reaches the threshold:
+
+```bash
+cd backend
+python nyx_cli.py scan --url https://target.example/ \
+  --fail-on high --out nyx-report.json
+```
+
+Exit codes: `0` clean at/above threshold, `1` threshold met, `2` error.
+Useful flags: `--params id,user_id`, `--checks active_sqli,active_xss`,
+`--depth fast|balanced|deep`, `--timeout 600`.
 
 ### Prometheus Metrics
 
@@ -784,6 +816,14 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
    - **iOS:** Install profile → Settings → General → Profile → Trust
    - **Windows/macOS:** Double-click → Install → Trusted Root Certification Authorities
 
+> Installing the CA on the **operator PC** is optional — it is only needed to
+> browse through Nyx from this machine, and Nyx never installs it automatically.
+> `GET /api/ca/status` reports where it is trusted (per store);
+> `POST /api/ca/remove` removes it and **verifies** the stores afterwards,
+> answering `removed: false` if a certificate is still trusted (removing from
+> `LocalMachine` needs an elevated Nyx). Firefox's own NSS store and Java
+> keystores are separate and are not touched.
+
 ---
 
 ## Development
@@ -791,22 +831,37 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
 ### Running Tests
 
 ```bash
-# Backend tests (455+ tests covering all modules)
+# Full backend suite (~1200 tests: modules, API contracts, scanners)
 cd backend
-python -m pytest tests/ -v --asyncio-mode=auto
+python -m pytest -q
 
 # Run specific test suite
-python -m pytest tests/test_interceptor_api.py -v --asyncio-mode=auto
-python -m pytest tests/test_repeater.py -v --asyncio-mode=auto
-python -m pytest tests/test_mitm.py -v --asyncio-mode=auto
+python -m pytest tests/test_interceptor_api.py -v
+python -m pytest tests/test_repeater.py -v
+python -m pytest tests/test_mitm.py -v
 
-# Frontend type check
+# Legacy suites at the repository root
+PYTHONPATH=backend python -m pytest tests -q
+
+# Frontend: type check, unit tests, build
 cd frontend
 npx tsc --noEmit
-
-# Frontend build
-cd frontend
+npm test
 npm run build
+```
+
+### Live end-to-end checks
+
+`backend/tests/test_api_route_contracts.py` walks every GET endpoint through
+ASGI and fails on any 500. For a running instance (Electron or `uvicorn`), the
+scripts in `.live_test/` exercise real traffic, writes and full flows:
+
+```bash
+python .live_test/build_matrix.py   # coverage matrix -> docs/NYX_TEST_MATRIX.md
+python .live_test/endpoint_sweep.py # read endpoints, flags 5xx
+python .live_test/write_sweep.py    # write endpoints, flags 5xx
+python .live_test/e2e_flows.py      # 17 cross-module flows via the proxy
+npx electron .live_test/browser_smoke.js  # integrated browser smoke test
 ```
 
 ### Project Structure
@@ -831,7 +886,7 @@ nyx/
 │   └── webhook/             # Slack/Discord/custom webhook forwarding
 ├── native/                  # C++ native modules
 │   └── grpc_parser/         # gRPC protobuf frame parser (pybind11 bindings)
-├── docs/                    # User guide, test guide, report docs
+├── docs/                    # User guide, test guide, coverage matrix, review
 ├── .github/workflows/       # CI/CD: build & test on push, release on tag
 ├── .dockerignore            # Docker build exclusions
 ├── docker-compose.yml       # Production deployment (PostgreSQL + nginx)
@@ -839,6 +894,19 @@ nyx/
 ```
 
 ---
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/NYX_USER_GUIDE.md`](docs/NYX_USER_GUIDE.md) | Install, first scan, each tab explained |
+| [`docs/NYX_TEST_GUIDE.md`](docs/NYX_TEST_GUIDE.md) | How to test the build end to end |
+| [`docs/NYX_TEST_MATRIX.md`](docs/NYX_TEST_MATRIX.md) | Generated API coverage matrix (endpoint × test × live status) |
+| [`docs/NYX_REVIEW_v1.0.0.md`](docs/NYX_REVIEW_v1.0.0.md) | Security/code review, findings and roadmap |
+| [`docs/threat-model.md`](docs/threat-model.md) | Assets, trust boundaries, threats |
+| [`SECURITY.md`](SECURITY.md) | Vulnerability disclosure, scope, safe defaults |
+
+`docs/NYX_REPORT.md` is a historical snapshot of the 0.1.x architecture.
 
 ## License
 

@@ -1,8 +1,15 @@
 # Nyx — Automated Web Security Testing Suite
 
-**Version:** 0.1.x  
-**Project Root:** `C:\Users\ilysm\Desktop\GitHub\nyx\`  
-**Blueprint:** `NYX_BLUEPRINT_V2.md` (3321 lines, Phase 1-5)  
+> **Storico / historical snapshot.** This document describes the 0.1.x
+> architecture and is kept for context only. For the current state use
+> [`NYX_REVIEW_v1.0.0.md`](NYX_REVIEW_v1.0.0.md) (findings + status),
+> [`NYX_TEST_MATRIX.md`](NYX_TEST_MATRIX.md) (API coverage) and
+> [`NYX_USER_GUIDE.md`](NYX_USER_GUIDE.md) (usage). Numbers and file paths
+> below may no longer match the tree.
+
+**Version:** 0.1.x (archived)  
+**Project Root:** `C:\Users\ilysm\Desktop\GitHub\nyx\` (historical path)  
+**Blueprint:** `NYX_BLUEPRINT_V2.md` (3321 lines, Phase 1-5, not in this repo)  
 **Architecture:** Python (FastAPI + mitmproxy) backend + React/TypeScript frontend + Postgres (optionally Go collaborator)
 
 ---
