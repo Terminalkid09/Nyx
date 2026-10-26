@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiClient } from '../api/client'
+import { useSessionStore } from '../store/useSessionStore'
 
 interface RequestSummary {
   id: string
@@ -31,6 +32,7 @@ const COLORS = [
 ]
 
 export function Organizer() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [items, setItems] = useState<OrganizerItem[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -93,9 +95,8 @@ export function Organizer() {
 
   const handleAddItem = async () => {
     if (!newTitle.trim()) return
-    const session_id = '00000000-0000-0000-0000-000000000001'
     const { data } = await apiClient.post('/api/organizer/', {
-      session_id,
+      session_id: activeSessionId,
       title: newTitle.trim(),
       notes: newUrl.trim() || null,
       color: newColor || null,

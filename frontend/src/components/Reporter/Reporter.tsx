@@ -14,22 +14,33 @@ export function Reporter() {
     setLoading(true)
     setError('')
     try {
-      const { data } = await apiClient.post('/api/reports/generate', null, {
+      // Always a blob: the server decides the real format, and a PDF that the
+      // backend cannot render answers 400 — with a blob response axios would
+      // otherwise turn that error body into "[object Blob]".
+      const response = await apiClient.post('/api/reports/generate', null, {
         params: { session_id: selectedSession, format },
-        responseType: format === 'pdf' ? 'blob' : 'text',
+        responseType: 'blob',
       })
 
-      const ext = format === 'pdf' ? 'pdf' : format
-      const mime = format === 'json' ? 'application/json' : format === 'md' ? 'text/markdown' : 'text/html'
-      const blob = format === 'pdf' ? data : new Blob([data], { type: mime })
+      const blob = response.data as Blob
+      const disposition = String(response.headers?.['content-disposition'] || '')
+      const match = disposition.match(/filename="?([^";]+)"?/)
+      const filename = match ? match[1] : `nyx-report-${selectedSession.slice(0, 8)}.${format}`
+
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `nyx-report-${selectedSession.slice(0, 8)}.${ext}`
+      a.download = filename
       a.click()
       URL.revokeObjectURL(url)
     } catch (err: any) {
-      setError(err.response?.data?.detail || err.message)
+      let detail = err.response?.data?.detail
+      if (err.response?.data instanceof Blob) {
+        try {
+          detail = JSON.parse(await err.response.data.text())?.detail
+        } catch { /* keep the generic message */ }
+      }
+      setError(detail || err.message)
     } finally {
       setLoading(false)
     }

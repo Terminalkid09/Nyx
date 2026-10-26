@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useSearchParams, useLocation } from 'react-router-dom'
 import { apiClient } from '../../api/client'
 import { useProxyStore } from '../../store/useProxyStore'
+import { useSessionStore } from '../../store/useSessionStore'
 import { ProxyRequestPicker } from '../ProxyRequestPicker/ProxyRequestPicker'
 
 const CHECKS = [
@@ -17,6 +18,7 @@ const CHECKS = [
 
 export function ActiveScanner() {
   const requests = useProxyStore((s) => s.requests)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const navState = (location.state || {}) as Record<string, any>
@@ -33,6 +35,7 @@ export function ActiveScanner() {
   const [customBody, setCustomBody] = useState(navState.body || '')
   const [useCustomUrl, setUseCustomUrl] = useState(!!queryUrl || !!navState.url)
   const [selectedChecks, setSelectedChecks] = useState<string[]>([])
+  const [depth, setDepth] = useState('balanced')
   const [results, setResults] = useState<any[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -114,6 +117,10 @@ export function ActiveScanner() {
         },
         target_params: params.length > 0 ? params : [''],
         checks: selectedChecks,
+        depth,
+        // Without the session id the scan bypasses the session's scope rules
+        // and the findings land in the default session.
+        session_id: activeSessionId,
       })
       setResults(data.results || [])
     } catch (err: any) {
@@ -201,6 +208,19 @@ export function ActiveScanner() {
               </label>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Depth</label>
+          <select
+            value={depth}
+            onChange={(e) => setDepth(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+          >
+            <option value="fast">fast — triage, no blind/OAST</option>
+            <option value="balanced">balanced — default</option>
+            <option value="deep">deep — full payloads</option>
+          </select>
         </div>
 
         <button

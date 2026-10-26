@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Users, Cookie, Play, Plus, Trash2, Share2, Shield, Edit3, X, Save, ChevronDown, ChevronRight } from 'lucide-react'
+import { useSessionStore } from '../../store/useSessionStore'
 import {
   fetchSessionRules,
   createSessionRule,
@@ -35,6 +36,7 @@ interface SessionToken {
 }
 
 export function SessionHandling() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [activeTab, setActiveTab] = useState<Tab>('rules')
   const [rules, setRules] = useState<SessionHandlingRule[]>([])
   const [cookies, setCookies] = useState<CookieEntry[]>([])
@@ -138,7 +140,7 @@ export function SessionHandling() {
     if (selectedReqIds.length === 0) return
     try {
       const resp = await apiClient.post('/api/session/macros/from-requests', {
-        session_id: '00000000-0000-0000-0000-000000000001',
+        session_id: activeSessionId,
         request_ids: selectedReqIds,
       })
       const steps = resp.data.steps

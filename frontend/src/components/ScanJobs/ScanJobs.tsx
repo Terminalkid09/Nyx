@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Play, XCircle, RefreshCw, Plus, ArrowUp, ArrowDown, Layers } from 'lucide-react'
+import { useSessionStore } from '../../store/useSessionStore'
 import {
   fetchScanJobs,
   createScanJob,
@@ -29,6 +30,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export function ScanJobs() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [jobs, setJobs] = useState<ScanJob[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -78,7 +80,7 @@ export function ScanJobs() {
     try {
       const config = { ...JSON.parse(newJob.config || '{}'), priority: newJob.priority }
       await createScanJob({
-        session_id: '00000000-0000-0000-0000-000000000001',
+        session_id: activeSessionId,
         scan_type: newJob.scan_type,
         target_url: newJob.target_url || undefined,
         config,
