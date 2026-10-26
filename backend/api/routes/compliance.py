@@ -55,12 +55,31 @@ async def get_gdpr_report(db: AsyncSession = Depends(get_db)):
     return await gen.generate_gdpr_report()
 
 
+@router.get("/nis2")
+async def get_nis2_report(db: AsyncSession = Depends(get_db)):
+    """Generate a NIS2 Art. 21(2) measures report.
+
+    Measures that a web assessment cannot evidence (risk-analysis policy,
+    training, continuity planning) are returned as NOT_ASSESSED instead of a
+    PASS that would mean nothing.
+    """
+    gen = ComplianceReportGenerator(db)
+    return await gen.generate_nis2_report()
+
+
+@router.get("/iso27001")
+async def get_iso27001_report(db: AsyncSession = Depends(get_db)):
+    """Generate an ISO/IEC 27001:2022 Annex A controls report."""
+    gen = ComplianceReportGenerator(db)
+    return await gen.generate_iso27001_report()
+
+
 @router.get("/full")
 async def get_full_compliance_report(db: AsyncSession = Depends(get_db)):
     """Generate all compliance reports in a single response.
 
-    Includes OWASP Top 10, PCI-DSS v4.0, and GDPR Art. 32 — useful for
-    generating a comprehensive compliance snapshot in one API call.
+    Includes OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32, NIS2 Art. 21(2) and
+    ISO/IEC 27001 Annex A — useful for a comprehensive snapshot in one call.
     """
     gen = ComplianceReportGenerator(db)
     return await gen.generate_full_report()

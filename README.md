@@ -47,7 +47,7 @@
 | **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
 | **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
-| **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
+| **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32, NIS2 Art. 21(2) and ISO/IEC 27001:2022 Annex A reports auto-generated from findings; measures a scan cannot evidence are marked NOT ASSESSED instead of passing |
 | **Security Hardening** | Host/Origin validation, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail; **optional** SQLCipher AES-256 encryption at-rest (off by default — the SQLite file is plaintext unless `NYX_SQLCIPHER_KEY` is set) |
 | **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 900+ tests, CI/CD pipeline, Electron code signing |
 

@@ -1,4 +1,4 @@
-"""Compliance report generator — OWASP Top 10, PCI-DSS, GDPR.
+"""Compliance report generator — OWASP Top 10, PCI-DSS, GDPR, NIS2, ISO 27001.
 
 Scans the findings database and maps each finding to the applicable
 compliance framework(s). Generates a structured JSON report that can
@@ -8,7 +8,11 @@ Frameworks supported:
   - OWASP Top 10 2021
   - PCI-DSS v4.0 (requirement-level mapping)
   - GDPR Art. 32 (security of processing)
+  - NIS2 (Directive (EU) 2022/2555) Art. 21(2) measures
+  - ISO/IEC 27001:2022 Annex A controls
 
+Every mapping is technical evidence from the findings, never a certification:
+measures a web assessment cannot observe are reported as NOT_ASSESSED.
 No external dependencies beyond what's already in the project.
 """
 import re
@@ -178,6 +182,92 @@ PCI_DSS_REQUIREMENTS = {
 GDPR_ARTICLES = {
     "Art.32": {"title": "Security of processing", "owasp_match": ["A02:2021", "A05:2021"]},
     "Art.33": {"title": "Notification of breach to supervisory authority", "owasp_match": ["A09:2021"]},
+}
+
+# NIS2, Directive (EU) 2022/2555, Art. 21(2) measures (a)-(j).
+#
+# ``assessed: False`` marks a measure a scanner cannot evidence: no amount of
+# findings proves a risk-analysis policy exists. Those come back as
+# NOT_ASSESSED instead of a dishonest PASS.
+NIS2_MEASURES = {
+    "21.2.a": {
+        "title": "Risk analysis and information system security policies",
+        "owasp_match": [],
+        "assessed": False,
+    },
+    "21.2.b": {"title": "Incident handling", "owasp_match": ["A09:2021"], "assessed": True},
+    "21.2.c": {
+        "title": "Business continuity, backup management and disaster recovery",
+        "owasp_match": [],
+        "assessed": False,
+    },
+    "21.2.d": {"title": "Supply chain security", "owasp_match": ["A08:2021"], "assessed": True},
+    "21.2.e": {
+        "title": "Security in acquisition, development and maintenance (vulnerability handling)",
+        "owasp_match": ["A03:2021", "A06:2021"],
+        "assessed": True,
+    },
+    "21.2.f": {
+        "title": "Policies to assess the effectiveness of security measures",
+        "owasp_match": [],
+        "assessed": False,
+    },
+    "21.2.g": {
+        "title": "Cyber hygiene practices and cybersecurity training",
+        "owasp_match": [],
+        "assessed": False,
+    },
+    "21.2.h": {
+        "title": "Cryptography and, where appropriate, encryption",
+        "owasp_match": ["A02:2021"],
+        "assessed": True,
+    },
+    "21.2.i": {
+        "title": "Human resources security, access control policies and asset management",
+        "owasp_match": ["A01:2021", "A07:2021"],
+        "assessed": True,
+    },
+    "21.2.j": {
+        "title": "Multi-factor authentication and secure communications",
+        "owasp_match": ["A07:2021"],
+        "assessed": True,
+    },
+}
+
+# ISO/IEC 27001:2022 Annex A controls a web assessment can actually evidence.
+ISO_27001_CONTROLS = {
+    "5.7":  {"title": "Threat intelligence", "owasp_match": [], "assessed": False},
+    "5.15": {"title": "Access control", "owasp_match": ["A01:2021"], "assessed": True},
+    "5.17": {"title": "Authentication information", "owasp_match": ["A07:2021"], "assessed": True},
+    "8.2":  {"title": "Privileged access rights", "owasp_match": ["A01:2021"], "assessed": True},
+    "8.8":  {"title": "Management of technical vulnerabilities", "owasp_match": ["A06:2021"], "assessed": True},
+    "8.9":  {"title": "Configuration management", "owasp_match": ["A05:2021"], "assessed": True},
+    "8.12": {"title": "Data leakage prevention", "owasp_match": ["A01:2021"], "assessed": True},
+    "8.16": {"title": "Monitoring activities", "owasp_match": ["A09:2021"], "assessed": True},
+    "8.20": {"title": "Networks security", "owasp_match": ["A10:2021"], "assessed": True},
+    "8.24": {"title": "Use of cryptography", "owasp_match": ["A02:2021"], "assessed": True},
+    "8.26": {"title": "Application security requirements", "owasp_match": ["A03:2021", "A04:2021"], "assessed": True},
+    "8.28": {"title": "Secure coding", "owasp_match": ["A03:2021"], "assessed": True},
+}
+
+NIS2_SCOPE = {
+    "basis": "Directive (EU) 2022/2555, Art. 21(2), measures (a)-(j)",
+    "caveat": (
+        "Technical evidence only: each measure is mapped from the findings of "
+        "this engagement. A measure without findings says nothing about the "
+        "operator's policy, training or continuity plans, so it is reported "
+        "as NOT_ASSESSED rather than PASS."
+    ),
+}
+
+ISO_27001_SCOPE = {
+    "basis": "ISO/IEC 27001:2022, Annex A controls evidenced from findings",
+    "caveat": (
+        "Technical evidence only. Annex A includes people and physical "
+        "controls a web assessment cannot observe; a nonconformity (NC) "
+        "and its risk acceptance are the auditor's determination, not this "
+        "report's."
+    ),
 }
 
 
@@ -351,6 +441,79 @@ class ComplianceReportGenerator:
             "articles": articles,
         }
 
+    async def _generate_measure_report(
+        self,
+        framework: str,
+        table: dict[str, dict],
+        id_key: str,
+        list_key: str,
+        scope: dict,
+    ) -> dict:
+        """Shared shape for the requirement/control style frameworks.
+
+        ``PASS`` means "assessed and clean", ``FAIL`` means findings landed in
+        the mapped OWASP categories, and ``NOT_ASSESSED`` means this engagement
+        produced no evidence either way.
+        """
+        findings = await self._load_findings()
+        owasp_mapped = self._findings_to_owasp(findings)
+
+        entries: list[dict] = []
+        for entry_id, meta in table.items():
+            violations: list[dict] = []
+            for owasp_id in meta["owasp_match"]:
+                violations.extend(owasp_mapped.get(owasp_id, []))
+            if violations:
+                status = "FAIL"
+            elif meta["assessed"]:
+                status = "PASS"
+            else:
+                status = "NOT_ASSESSED"
+            entries.append(
+                {
+                    id_key: entry_id,
+                    "title": meta["title"],
+                    "status": status,
+                    "violations": violations,
+                    "violation_count": len(violations),
+                }
+            )
+
+        return {
+            "report_id": str(uuid.uuid4()),
+            "framework": framework,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scope": scope,
+            "summary": {
+                "total": len(entries),
+                "passed": sum(1 for e in entries if e["status"] == "PASS"),
+                "failed": sum(1 for e in entries if e["status"] == "FAIL"),
+                "not_assessed": sum(1 for e in entries if e["status"] == "NOT_ASSESSED"),
+                "total_violations": sum(e["violation_count"] for e in entries),
+            },
+            list_key: entries,
+        }
+
+    async def generate_nis2_report(self) -> dict:
+        """Generate a NIS2 Art. 21(2) measures report."""
+        return await self._generate_measure_report(
+            framework="NIS2 Art. 21(2)",
+            table=NIS2_MEASURES,
+            id_key="measure_id",
+            list_key="measures",
+            scope=NIS2_SCOPE,
+        )
+
+    async def generate_iso27001_report(self) -> dict:
+        """Generate an ISO/IEC 27001:2022 Annex A controls report."""
+        return await self._generate_measure_report(
+            framework="ISO/IEC 27001:2022 Annex A",
+            table=ISO_27001_CONTROLS,
+            id_key="control_id",
+            list_key="controls",
+            scope=ISO_27001_SCOPE,
+        )
+
     async def generate_full_report(self) -> dict:
         """Generate all compliance reports in one call."""
         return {
@@ -360,4 +523,6 @@ class ComplianceReportGenerator:
             "owasp": await self.generate_owasp_report(),
             "pci_dss": await self.generate_pci_dss_report(),
             "gdpr": await self.generate_gdpr_report(),
+            "nis2": await self.generate_nis2_report(),
+            "iso27001": await self.generate_iso27001_report(),
         }
