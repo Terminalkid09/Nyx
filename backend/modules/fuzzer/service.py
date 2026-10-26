@@ -3,6 +3,7 @@ import re
 import hashlib
 import base64
 import asyncio
+from contextlib import asynccontextmanager
 import uuid
 import binascii
 import urllib.parse
@@ -14,12 +15,63 @@ import httpx
 
 logger = logging.getLogger(__name__)
 from core.events.bus import EventBus
-from core.storage.models import FuzzJob
+from core.storage.models import FuzzJob, FuzzResult
 from core.storage.database import AsyncSessionLocal
 
 
 MARKER = "§"
 MAX_CARTESIAN_PRODUCT = 500_000
+# A fuzz job used to keep every request/response pair in a single JSON column: a
+# 100k-payload run against a chatty endpoint could write hundreds of MB and
+# freeze the UI. Keep the first N results and truncate each stored direction.
+MAX_STORED_RESULTS = 5_000
+MAX_RESULT_FIELD = 64 * 1024
+# Concurrency used to be unbounded (one coroutine and one TLS client per
+# payload). 20 in-flight requests keeps a site usable and the process small.
+FUZZ_WORKERS = 20
+# Results are written to ``fuzz_results`` in batches of this size: one commit
+# per payload would make SQLite the bottleneck, one commit per job would keep
+# every result in memory again.
+RESULTS_BATCH = 100
+
+
+def parse_raw_scheme(host: str, path: str) -> str:
+    """Return the absolute URL a raw request line should target."""
+    if path.startswith(("http://", "https://")):
+        return path
+    port = host.rsplit(":", 1)[1] if ":" in host else ""
+    scheme = "https" if port in ("", "443", "8443") else "http"
+    return f"{scheme}://{host}{path}"
+
+
+def truncate_result(result: dict, limit: int = MAX_RESULT_FIELD) -> dict:
+    """Bound the size of the request/response text stored per fuzz result."""
+    for key in ("request", "response"):
+        value = result.get(key)
+        if isinstance(value, str) and len(value) > limit:
+            result[key] = value[:limit]
+            result["truncated"] = True
+    return result
+
+
+def build_result_row(job_id, seq: int, result: dict) -> FuzzResult:
+    """Turn one in-flight result dict into a ``fuzz_results`` row."""
+    result = truncate_result(result)
+    return FuzzResult(
+        job_id=job_id,
+        seq=seq,
+        payload=result.get("payload") or {},
+        status=result.get("status"),
+        size=result.get("size") or 0,
+        time_ms=result.get("time_ms") or 0,
+        error=result.get("error"),
+        waf_detected=result.get("waf_detected"),
+        grep_results=result.get("grep_results") or {},
+        extracted=result.get("extracted") or {},
+        request=result.get("request"),
+        response=result.get("response"),
+        truncated=bool(result.get("truncated")),
+    )
 
 
 class TokenBucket:
@@ -31,6 +83,11 @@ class TokenBucket:
         self._lock = asyncio.Lock()
 
     async def acquire(self):
+        # rate <= 0 means unlimited, matching the RoE convention. Before this
+        # guard, a 0 rate made the bucket divide by zero on the second acquire
+        # and every worker died, leaving the job "running" forever with 0/N.
+        if self.rate <= 0:
+            return
         async with self._lock:
             now = time.monotonic()
             elapsed = now - self.last_refill
@@ -380,8 +437,9 @@ class FuzzerService:
             i += 1
         body = "\n".join(lines[i + 1:]) if i + 1 < len(lines) else None
         host = headers.get("Host", "")
-        scheme = "https"
-        url = f"{scheme}://{host}{path}"
+        # A raw HTTP template has no scheme. Assuming https made every fuzz
+        # request to a plain-HTTP target fail with WRONG_VERSION_NUMBER.
+        url = parse_raw_scheme(host, path)
         return {"method": method, "url": url, "headers": headers, "content": body}
 
     async def run_job(
@@ -401,14 +459,65 @@ class FuzzerService:
         total = len(payload_mappings)
         completed = 0
 
-        results_list = []
+        job_session_id = None
 
         async with AsyncSessionLocal() as db:
             job = await db.get(FuzzJob, job_id)
             if job:
+                job_session_id = job.session_id
                 job.status = "running"
                 job.total_requests = total
                 await db.commit()
+
+        # Scope/RoE gate before a single payload leaves the machine. The
+        # template is a raw HTTP request; its URL is what the fuzzer will hit.
+        target_url = None
+        try:
+            target_url = self._parse_raw_http(template).get("url")
+        except ValueError:
+            target_url = None
+        if target_url:
+            from core.authorization import authorize
+            allowed, kind, detail = await authorize(job_session_id, target_url)
+            if not allowed:
+                async with AsyncSessionLocal() as db:
+                    blocked = await db.get(FuzzJob, job_id)
+                    if blocked:
+                        blocked.status = "cancelled"
+                        # The refusal is a result row too, so the UI shows why
+                        # the job produced nothing instead of an empty table.
+                        db.add(FuzzResult(
+                            job_id=job_id,
+                            seq=0,
+                            payload={"url": target_url},
+                            status=None,
+                            error=f"Target not authorized ({kind}: {detail})",
+                        ))
+                        await db.commit()
+                logger.warning(
+                    "Fuzz job %s blocked: %s (%s)", job_id, target_url, kind
+                )
+                await self.event_bus.publish({
+                    "type": "fuzz.blocked",
+                    "job_id": str(job_id),
+                    "url": target_url,
+                    "reason": kind,
+                    "detail": detail,
+                })
+                self._cancel_flags.discard(job_id)
+                return
+
+        # One client for the whole job: TLS handshakes are reused instead of
+        # paying a new handshake for every payload.
+        shared_http_client = httpx.AsyncClient(
+            verify=False, timeout=10,
+            limits=httpx.Limits(max_connections=FUZZ_WORKERS,
+                                max_keepalive_connections=FUZZ_WORKERS // 2),
+        )
+
+        @asynccontextmanager
+        async def shared_client():
+            yield shared_http_client
 
         async def send_one(payload_map: dict[str, str]) -> dict | None:
             nonlocal completed
@@ -433,8 +542,37 @@ class FuzzerService:
                     "response": None,
                 }
 
-            async with httpx.AsyncClient(verify=False, timeout=10) as client:
+            # Payload substitution can change the path or query that leaves
+            # the machine, so the job-level check is not enough: authorize the
+            # concrete URL of every payload.
+            from core.authorization import authorize
+            allowed, kind, detail = await authorize(
+                job_session_id, parsed.get("url", "")
+            )
+            if not allowed:
+                completed += 1
+                logger.warning(
+                    "Fuzz payload blocked for job %s (%s: %s)",
+                    job_id, kind, detail,
+                )
+                return {
+                    "payload": payload_map,
+                    "error": f"Target not authorized ({kind}: {detail})",
+                    "status": None,
+                    "size": 0,
+                    "time_ms": 0,
+                    "grep_results": {},
+                    "extracted": {},
+                    "request": request_str,
+                    "response": None,
+                }
+
+            async with shared_client() as client:
                 try:
+                    # Signed RoE max_rps applies to fuzz payloads too, not
+                    # only to the job-level authorization check.
+                    from core.roe import pace
+                    await pace(parsed.get("url", ""))
                     resp = await client.request(**parsed)
                     body_text = resp.text
                     resp_headers_str = "\r\n".join(f"{k}: {v}" for k, v in resp.headers.items())
@@ -476,7 +614,14 @@ class FuzzerService:
                         if is_regex:
                             m = re.search(pattern, body_text)
                             if m:
-                                result["extracted"][name] = m.group(group) if group <= m.lastindex else m.group(0)
+                                # lastindex is None when the pattern has no
+                                # capturing groups, and comparing int <= None
+                                # raised TypeError mid-job (BUG-12).
+                                lastindex = m.lastindex or 0
+                                result["extracted"][name] = (
+                                    m.group(group) if 0 < group <= lastindex
+                                    else m.group(0)
+                                )
                             else:
                                 result["extracted"][name] = None
                         else:
@@ -511,12 +656,62 @@ class FuzzerService:
 
             return result
 
-        tasks = [send_one(pm) for pm in payload_mappings]
-        done = await asyncio.gather(*tasks)
+        # Bounded worker pool over a queue: at most FUZZ_WORKERS payloads are
+        # in flight, and cancellation is honoured between items.
+        work_queue: asyncio.Queue = asyncio.Queue()
+        for payload_map in payload_mappings:
+            work_queue.put_nowait(payload_map)
 
-        for r in done:
-            if r is not None:
-                results_list.append(r)
+        # Results are streamed to fuzz_results in batches instead of being
+        # accumulated and written as one JSON blob at the end (BUG-04 fase B).
+        batch: list[FuzzResult] = []
+        stored = 0
+
+        async def flush_results():
+            nonlocal batch
+            if not batch:
+                return
+            rows, batch = batch, []
+            async with AsyncSessionLocal() as db:
+                db.add_all(rows)
+                # Also refresh the counter the UI polls, so progress moves
+                # during the run and not only when the job finishes.
+                job = await db.get(FuzzJob, job_id)
+                if job is not None:
+                    job.completed_requests = completed
+                await db.commit()
+
+        async def fuzz_worker():
+            nonlocal stored
+            while True:
+                try:
+                    payload_map = work_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                if job_id in self._cancel_flags:
+                    continue
+                result = await send_one(payload_map)
+                if result is not None and stored < MAX_STORED_RESULTS:
+                    batch.append(build_result_row(job_id, stored, result))
+                    stored += 1
+                    if len(batch) >= RESULTS_BATCH:
+                        await flush_results()
+
+        worker_count = min(FUZZ_WORKERS, max(1, total))
+        try:
+            await asyncio.gather(*(fuzz_worker() for _ in range(worker_count)))
+        except Exception:
+            # A crashing worker must not leave the job stuck in "running".
+            logger.exception("Fuzz job %s worker failed", job_id)
+        finally:
+            await shared_http_client.aclose()
+
+        if completed > stored:
+            logger.warning(
+                "Fuzz job %s completed %d payloads; stored %d (cap %d)",
+                job_id, completed, stored, MAX_STORED_RESULTS,
+            )
+        await flush_results()
 
         async with AsyncSessionLocal() as db:
             job = await db.get(FuzzJob, job_id)
@@ -525,8 +720,7 @@ class FuzzerService:
                     job.status = "cancelled"
                 else:
                     job.status = "done"
-                job.completed_requests = len(results_list)
-                job.results = results_list
+                job.completed_requests = completed
                 await db.commit()
 
         self._cancel_flags.discard(job_id)
