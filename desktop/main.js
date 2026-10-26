@@ -16,6 +16,9 @@ autoUpdater.autoInstallOnAppQuit = true;
 let backendProcess = null;
 let mainWindow = null;
 let loadingWindow = null;
+// Last proxy/capture state read when the browsing window opened; the renderer
+// pulls it through the browser-preload bridge.
+let browserProxyState = { capture: false, tlsMitm: true };
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
@@ -432,6 +435,15 @@ async function launchBrowser() {
     }
   });
 
+  // A browsing window pointed at untrusted sites must not hand out device
+  // permissions. Electron's default is to grant them, which let any page
+  // opened here use the camera/mic/geolocation. Fullscreen is the only
+  // permission a test target plausibly needs.
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'fullscreen');
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => permission === 'fullscreen');
+
   // Check if proxy capture is active
   let useProxy = false;
   let tlsMitm = true; // TLS MITM forced (CA trusted) — decrypt HTTPS
@@ -452,6 +464,9 @@ async function launchBrowser() {
   } catch (err) {
     console.error('Failed to check proxy capture status:', err);
   }
+  // Read by the renderer so the toolbar reports the real state instead of a
+  // hard-coded "PROXIED" badge.
+  browserProxyState = { capture: useProxy, tlsMitm };
 
   if (useProxy) {
     try {
@@ -488,11 +503,43 @@ async function launchBrowser() {
       contextIsolation: true,
       sandbox: true,
       webviewTag: true,
+      preload: path.join(__dirname, 'browser-preload.js'),
     },
+  });
+
+  // The window itself is local chrome: it never navigates anywhere else.
+  browserWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  browserWin.webContents.on('will-navigate', (event) => {
+    // loadFile() is the only legitimate navigation of the chrome page.
+    event.preventDefault();
+  });
+
+  // Harden the embedded page: no node, no preload, and only http(s) under it.
+  browserWin.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    if (!/^https?:\/\//i.test(params.src || '')) {
+      event.preventDefault();
+    }
+  });
+
+  browserWin.webContents.on('did-attach-webview', (_event, guest) => {
+    // Target pages must not open windows or leave http(s). A window.open()
+    // popup used to inherit this partition and render attacker content
+    // outside every guard above.
+    guest.setWindowOpenHandler(() => ({ action: 'deny' }));
+    guest.on('will-navigate', (event, url) => {
+      if (!/^https?:\/\//i.test(url)) event.preventDefault();
+    });
   });
 
   const browserPage = path.join(__dirname, 'browser.html');
   browserWin.loadFile(browserPage);
+  browserWin.webContents.on('did-finish-load', () => {
+    browserWin.webContents.send('browser-proxy-state', browserProxyState);
+  });
 }
 
 function toggleProxyCapture(active) {
@@ -545,6 +592,8 @@ ipcMain.on('toggle-proxy-capture', (_event, active) => toggleProxyCapture(active
 // The backend persists its API key to nyx.secret under NYX_HOME on first
 // boot. Expose it to the renderer so API calls can carry X-API-Key (needed
 // as soon as the API is ever bound beyond localhost).
+ipcMain.handle('browser-proxy-state', () => browserProxyState);
+
 ipcMain.handle('get-api-key', () => {
   try {
     const secretPath = path.join(app.getPath('userData'), 'data', 'nyx.secret');
