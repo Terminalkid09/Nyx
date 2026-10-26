@@ -51,7 +51,6 @@ const OnboardingWizard = lazy(() => import('./components/OnboardingWizard'))
 const LiveAudit = lazyNamed(() => import('./components/LiveAudit'), 'LiveAudit')
 const AutoExploit = lazyNamed(() => import('./components/AutoExploit/AutoExploit'), 'AutoExploit')
 const Recommendations = lazyNamed(() => import('./components/Recommendations/Recommendations'), 'Recommendations')
-const Plugins = lazyNamed(() => import('./components/Plugins/Plugins'), 'Plugins')
 const Settings = lazyNamed(() => import('./components/Settings/Settings'), 'Settings')
 const Triage = lazyNamed(() => import('./components/Triage/Triage'), 'Triage')
 const ScanPolicies = lazyNamed(() => import('./components/ScanPolicies/ScanPolicies'), 'ScanPolicies')
@@ -61,6 +60,9 @@ const AuthScan = lazyNamed(() => import('./components/AuthScan/AuthScan'), 'Auth
 const CustomChecks = lazyNamed(() => import('./components/Scanner/CustomChecks'), 'CustomChecks')
 const Compliance = lazyNamed(() => import('./components/Compliance/Compliance'), 'Compliance')
 const Metrics = lazyNamed(() => import('./components/Metrics/Metrics'), 'Metrics')
+const RulesOfEngagement = lazyNamed(() => import('./components/RoE/RulesOfEngagement'), 'RulesOfEngagement')
+const AttackPath = lazyNamed(() => import('./components/AttackPath/AttackPath'), 'AttackPath')
+const Verifier = lazyNamed(() => import('./components/Verifier/Verifier'), 'Verifier')
 
 function RouteFallback() {
   return (
@@ -157,7 +159,6 @@ export default function App() {
                 <Route path="/organizer" element={<RouteErrorBoundary><Organizer /></RouteErrorBoundary>} />
                 <Route path="/recommendations" element={<RouteErrorBoundary><Recommendations /></RouteErrorBoundary>} />
                 <Route path="/auto-exploit" element={<RouteErrorBoundary><AutoExploit /></RouteErrorBoundary>} />
-                <Route path="/plugins" element={<RouteErrorBoundary><Plugins /></RouteErrorBoundary>} />
                 <Route path="/settings" element={<RouteErrorBoundary><Settings /></RouteErrorBoundary>} />
                 <Route path="/triage" element={<RouteErrorBoundary><Triage /></RouteErrorBoundary>} />
                 <Route path="/scan-policies" element={<RouteErrorBoundary><ScanPolicies /></RouteErrorBoundary>} />
@@ -172,6 +173,9 @@ export default function App() {
                 <Route path="/mitm" element={<RouteErrorBoundary><MitmPage /></RouteErrorBoundary>} />
                 <Route path="/compliance" element={<RouteErrorBoundary><Compliance /></RouteErrorBoundary>} />
                 <Route path="/metrics" element={<RouteErrorBoundary><Metrics /></RouteErrorBoundary>} />
+                <Route path="/roe" element={<RouteErrorBoundary><RulesOfEngagement /></RouteErrorBoundary>} />
+                <Route path="/attack-path" element={<RouteErrorBoundary><AttackPath /></RouteErrorBoundary>} />
+                <Route path="/verifier" element={<RouteErrorBoundary><Verifier /></RouteErrorBoundary>} />
                 </Routes>
               </Suspense>
             </main>

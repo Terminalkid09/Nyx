@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Puzzle, Settings2, AlertTriangle, FileText, Webhook, Lightbulb } from 'lucide-react'
+import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Settings2, AlertTriangle, FileText, Webhook, Lightbulb, ScrollText, GitBranch, BadgeCheck } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { SessionSwitcher } from './SessionSwitcher'
 
@@ -40,12 +40,13 @@ const navGroups = [
     items: [
       { to: '/comparer', label: 'Comparer', icon: GitCompare, badgeKey: null },
       { to: '/auto-exploit', label: 'Auto Exploit', icon: Bug, badgeKey: null },
+      { to: '/verifier', label: 'Exploit Verifier', icon: BadgeCheck, badgeKey: null },
+      { to: '/attack-path', label: 'Attack Path', icon: GitBranch, badgeKey: null },
       { to: '/ws-messages', label: 'WebSocket MSG', icon: Globe, badgeKey: null },
       { to: '/triage', label: 'Smart Triage', icon: AlertTriangle, badgeKey: null },
       { to: '/auth-scan', label: 'Auth Scan', icon: Shield, badgeKey: null },
       { to: '/scan-policies', label: 'Scan Policies', icon: FileText, badgeKey: null },
       { to: '/automations', label: 'Automations', icon: Webhook, badgeKey: null },
-      { to: '/plugins', label: 'Plugins', icon: Puzzle, badgeKey: null },
       { to: '/inspector', label: 'Inspector', icon: SearchIcon, badgeKey: null },
       { to: '/search', label: 'Search', icon: FileSearch, badgeKey: null },
     ]
@@ -59,6 +60,7 @@ const navGroups = [
       { to: '/session', label: 'Session Handling', icon: Users, badgeKey: null },
       { to: '/scan-jobs', label: 'Scan Jobs', icon: Play, badgeKey: null },
       { to: '/compliance', label: 'Compliance', icon: FileText, badgeKey: null },
+      { to: '/roe', label: 'Rules of Engagement', icon: ScrollText, badgeKey: null },
       { to: '/metrics', label: 'Metrics', icon: Activity, badgeKey: null },
     ]
   }
