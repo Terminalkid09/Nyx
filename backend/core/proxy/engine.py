@@ -21,109 +21,281 @@ logger = logging.getLogger(__name__)
 TRANSPARENT_PORT = 8082
 
 
-def _ca_in_trust_store(ca_path: str | Path | None = None) -> bool:
-    """Best-effort check whether the Nyx/mitmproxy CA is installed in the OS trust store.
+# Subject the Nyx CA is issued with. mitmproxy names its CA "mitmproxy"; the
+# portal and docs use the same string.
+_CA_SUBJECT_MATCH = "mitmproxy"
+_WIN_STORES = ("CurrentUser", "LocalMachine")
 
-    Windows: looks for a cert whose subject contains 'mitmproxy' in the
-    CurrentUser/LocalMachine Root store.
-    macOS:   uses ``security find-certificate`` against the login/system chain.
-    Linux:   checks whether the CA was copied into /usr/local/share/ca-certificates
-             (the standard location ``update-ca-certificates`` reads).
 
-    Returns True when the CA is present or when detection is inconclusive
-    (fails safe: we never silently disable TLS MITM on an unknown platform).
+def _run_powershell(script: str, timeout: float = 20) -> subprocess.CompletedProcess | None:
+    """Run a PowerShell snippet without a console window, or return None.
+
+    ``CREATE_NO_WINDOW`` keeps a console from being attached to the backend
+    when it shells out, and ``-NonInteractive`` prevents a prompt (e.g. a
+    certificate-consent dialog) from blocking the request forever.
     """
-    if platform.system().lower() == "windows":
+    if platform.system().lower() != "windows":
+        return None
+    try:
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("PowerShell call failed: %s", e)
+        return None
+
+
+def _windows_ca_counts() -> dict[str, int]:
+    """Count the Nyx CA in every Windows root store, per store.
+
+    Returns ``{}`` when the stores could not be read — callers treat that as
+    "unknown", never as "not installed".
+    """
+    script = (
+        "foreach ($store in @('CurrentUser','LocalMachine')) { "
+        "$n = @(Get-ChildItem -Path \"Cert:\\$store\\Root\" -ErrorAction SilentlyContinue "
+        "| Where-Object { $_.Subject -match '" + _CA_SUBJECT_MATCH + "' }).Count; "
+        "\"$store=$n\" }"
+    )
+    result = _run_powershell(script, timeout=15)
+    if result is None:
+        return {}
+    counts: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        name, _, value = line.strip().partition("=")
+        if name in _WIN_STORES and value.strip().isdigit():
+            counts[name] = int(value.strip())
+    return counts
+
+
+def _macos_ca_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chain, label in (
+        ("/Library/Keychains/System.keychain", "System"),
+        ("login.keychain", "Login"),
+    ):
         try:
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-ChildItem -Path Cert:\\LocalMachine\\Root, Cert:\\CurrentUser\\Root "
-                 "-ErrorAction SilentlyContinue | Where-Object { $_.Subject -match 'mitmproxy' }"],
-                capture_output=True, text=True, timeout=10,
+                ["security", "find-certificate", "-a", "-c", _CA_SUBJECT_MATCH, chain],
+                capture_output=True, text=True, timeout=15,
             )
-            # certutil-compatible: any output row means the CA subject is present.
-            return "mitmproxy" in out.stdout.lower()
-        except Exception as e:
-            logger.debug("CA trust check (Windows) inconclusive: %s", e)
-            return True
-    if platform.system().lower() == "darwin":
+            present = "mitmproxy" in (out.stdout + out.stderr).lower()
+            counts[label] = 1 if present else 0
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.debug("CA trust check (macOS %s) failed: %s", label, e)
+    return counts
+
+
+def _linux_ca_files() -> list:
+    dirs = [Path("/usr/local/share/ca-certificates"), Path("/etc/ssl/certs")]
+    found = []
+    for d in dirs:
         try:
-            out = subprocess.run(
-                ["security", "find-certificate", "-a", "-c", "mitmproxy"],
-                capture_output=True, text=True, timeout=10,
+            if not d.exists():
+                continue
+            for p in d.iterdir():
+                if p.is_file() and (_CA_SUBJECT_MATCH in p.name.lower() or "nyx" in p.name.lower()):
+                    found.append(p)
+        except OSError as e:
+            logger.debug("CA trust check (Linux %s) failed: %s", d, e)
+    return found
+
+
+def ca_trust_state() -> dict:
+    """Where the Nyx/mitmproxy CA is trusted on THIS machine.
+
+    ``trusted`` is ``None`` when the platform could not be queried: a caller
+    must not read that as "not installed". Installing the CA on the operator
+    machine is optional — it is only needed to browse through Nyx from this
+    PC, while targets install it from the LAN portal.
+    """
+    system = platform.system().lower()
+    if system == "windows":
+        counts = _windows_ca_counts()
+        if not counts:
+            return {
+                "platform": system, "trusted": None, "inconclusive": True,
+                "stores": {}, "detail": "Could not read the Windows certificate stores.",
+            }
+        return {
+            "platform": system,
+            "trusted": any(counts.values()),
+            "inconclusive": False,
+            "stores": counts,
+            "detail": "Root stores queried: CurrentUser (this user) and LocalMachine (this PC).",
+        }
+    if system == "darwin":
+        counts = _macos_ca_counts()
+        if not counts:
+            return {
+                "platform": system, "trusted": None, "inconclusive": True,
+                "stores": {}, "detail": "Could not read the macOS keychains.",
+            }
+        return {
+            "platform": system,
+            "trusted": any(counts.values()),
+            "inconclusive": False,
+            "stores": counts,
+            "detail": "Keychains queried: System and login.",
+        }
+    if system == "linux":
+        files = _linux_ca_files()
+        return {
+            "platform": system,
+            "trusted": bool(files),
+            "inconclusive": False,
+            "stores": {"System": len(files)},
+            "detail": "Files under /usr/local/share/ca-certificates and /etc/ssl/certs.",
+        }
+    return {
+        "platform": system, "trusted": None, "inconclusive": True,
+        "stores": {}, "detail": f"Unsupported platform: {system}",
+    }
+
+
+def _ca_in_trust_store(ca_path: str | Path | None = None) -> bool:
+    """True when the CA is trusted somewhere on this machine.
+
+    Kept for callers that only need a boolean; "unknown" counts as True so an
+    undetectable platform never silently disables TLS interception.
+    """
+    state = ca_trust_state()
+    return True if state["trusted"] is None else bool(state["trusted"])
+
+
+def remove_ca_verified() -> dict:
+    """Remove the Nyx/mitmproxy CA everywhere we can see it, then verify.
+
+    Verification is the point: the previous implementation reported success
+    after a best-effort delete, so a CA left in the LocalMachine hive (no
+    admin) or a half-finished PowerShell run looked like a clean removal. This
+    returns per-store counts before/after and only sets ``removed`` when a
+    fresh query finds nothing.
+
+    Note: Windows stores are the only trust store checked here. Firefox (its
+    own NSS store) and Java keystores are separate and are reported, not
+    touched.
+    """
+    system = platform.system().lower()
+    result: dict = {
+        "platform": system,
+        "removed": False,
+        "still_present": [],
+        "stores": {},
+        "message": "",
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    if system == "windows":
+        before = _windows_ca_counts()
+        if not before:
+            result["message"] = (
+                "Could not read the Windows certificate stores, so removal could "
+                "not be verified. Check with certmgr.msc."
             )
-            return "mitmproxy" in out.stdout.lower() or "mitmproxy" in out.stderr.lower()
-        except Exception as e:
-            logger.debug("CA trust check (macOS) inconclusive: %s", e)
-            return True
-    if platform.system().lower() == "linux":
-        dirs = [Path("/usr/local/share/ca-certificates"), Path("/etc/ssl/certs")]
-        for d in dirs:
+            return result
+        script = (
+            "foreach ($store in @('CurrentUser','LocalMachine')) { "
+            "try { "
+            "$s = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', $store); "
+            "$s.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite); "
+            "@($s.Certificates | Where-Object { $_.Subject -match '" + _CA_SUBJECT_MATCH + "' }) "
+            "| ForEach-Object { $s.Remove($_) }; "
+            "$s.Close() "
+            "} catch { \"ERROR $store $($_.Exception.Message)\" } }"
+        )
+        _run_powershell(script, timeout=30)
+        after = _windows_ca_counts()
+        result["stores"] = {
+            name: {"before": before.get(name), "after": after.get(name)}
+            for name in before
+        }
+        if not after:
+            result["message"] = (
+                "Removal ran but the stores could not be re-read, so it is NOT "
+                "verified. Check with certmgr.msc."
+            )
+            return result
+        still = [name for name, count in after.items() if count]
+        result["still_present"] = still
+        result["removed"] = not still
+        if still:
+            result["message"] = (
+                "CA still present in " + ", ".join(still) + ". Removing it from "
+                "LocalMachine needs Nyx running as Administrator; otherwise open "
+                "certmgr.msc (Trusted Root Certification Authorities → Certificates) "
+                "and delete the mitmproxy entry."
+            )
+        else:
+            result["message"] = (
+                "Nyx/mitmproxy CA removed and verified: no entry left in the "
+                "CurrentUser or LocalMachine root store."
+            )
+        return result
+
+    if system == "darwin":
+        for chain in ("/Library/Keychains/System.keychain", "login.keychain"):
             try:
-                if d.exists():
-                    entries = [p.name.lower() for p in d.iterdir() if p.is_file()]
-                    if any("mitmproxy" in name or "nyx" in name for name in entries):
-                        return True
-            except Exception as e:
-                logger.debug("CA trust check (Linux) inconclusive: %s", e)
-        return False
-    return True
+                subprocess.run(
+                    ["security", "delete-certificate", "-c", _CA_SUBJECT_MATCH, chain],
+                    capture_output=True, text=True, timeout=15,
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.warning("CA removal failed on %s: %s", chain, e)
+        after = _macos_ca_counts()
+        result["stores"] = {name: {"after": count} for name, count in after.items()}
+        still = [name for name, count in after.items() if count]
+        result["still_present"] = still
+        result["removed"] = bool(after) and not still
+        result["message"] = (
+            "Nyx/mitmproxy CA removed and verified from the System and login keychains."
+            if result["removed"] else
+            "CA still present in " + (", ".join(still) or "an unreadable keychain") +
+            ". Remove it from Keychain Access."
+        )
+        return result
+
+    if system == "linux":
+        files = _linux_ca_files()
+        removed = 0
+        for p in files:
+            try:
+                p.unlink()
+                removed += 1
+            except OSError as e:
+                logger.warning("Could not remove %s: %s", p, e)
+        if removed:
+            try:
+                subprocess.run(
+                    ["update-ca-certificates"],
+                    capture_output=True, text=True, timeout=60,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.warning("update-ca-certificates failed: %s", e)
+        after = _linux_ca_files()
+        result["stores"] = {"System": {"before": len(files), "after": len(after)}}
+        result["still_present"] = ["System"] if after else []
+        result["removed"] = not after
+        result["message"] = (
+            f"Nyx/mitmproxy CA removed and verified ({removed} file(s), bundle refreshed)."
+            if result["removed"] else
+            "CA files are still present (a root-owned directory needs sudo)."
+        )
+        return result
+
+    result["message"] = f"Unsupported platform: {system}"
+    return result
 
 
 def remove_ca_from_trust_store() -> tuple[bool, str]:
-    """Remove the Nyx/mitmproxy CA from this machine's trust store.
-
-    Used for post-engagement cleanup: leaving a testing CA trusted after the
-    test is a security hazard. Best-effort per platform; returns (ok, message).
-    """
-    system = platform.system().lower()
-    try:
-        if system == "windows":
-            ps_cmd = (
-                "Get-ChildItem -Path Cert:\\LocalMachine\\Root, Cert:\\CurrentUser\\Root "
-                "-ErrorAction SilentlyContinue "
-                "| Where-Object { $_.Subject -match 'mitmproxy' } "
-                "| Remove-Item -Force -ErrorAction SilentlyContinue"
-            )
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True, text=True, timeout=15,
-            )
-            still = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-ChildItem -Path Cert:\\LocalMachine\\Root, Cert:\\CurrentUser\\Root "
-                 "-ErrorAction SilentlyContinue | Where-Object { $_.Subject -match 'mitmproxy' }"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if "mitmproxy" in still.stdout.lower():
-                return False, "CA still present in the Windows trust store (LocalMachine removal may need admin)."
-            return True, "Nyx/mitmproxy CA removed from the Windows trust store."
-        if system == "darwin":
-            for chain in ("/Library/Keychains/System.keychain", "login.keychain"):
-                subprocess.run(
-                    ["security", "delete-certificate", "-c", "mitmproxy", chain],
-                    capture_output=True, text=True, timeout=10,
-                )
-            return True, "Nyx/mitmproxy CA removed from the macOS keychains."
-        if system == "linux":
-            removed = 0
-            for d in [Path("/usr/local/share/ca-certificates"), Path("/etc/ssl/certs")]:
-                if not d.exists():
-                    continue
-                for p in d.iterdir():
-                    if p.is_file() and ("mitmproxy" in p.name.lower() or "nyx" in p.name.lower()):
-                        try:
-                            p.unlink()
-                            removed += 1
-                        except OSError:
-                            pass
-            if removed:
-                subprocess.run(["update-ca-certificates"], capture_output=True, text=True, timeout=30)
-            return True, f"Removed {removed} Nyx/mitmproxy CA file(s)."
-        return False, f"Unsupported platform: {system}"
-    except Exception as e:
-        logger.warning("CA removal failed: %s", e)
-        return False, f"CA removal failed: {e}"
+    """Backwards-compatible wrapper around :func:`remove_ca_verified`."""
+    outcome = remove_ca_verified()
+    return bool(outcome["removed"]), outcome["message"]
 
 
 def _linux_default_iface() -> str:

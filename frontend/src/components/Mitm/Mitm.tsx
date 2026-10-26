@@ -7,6 +7,8 @@ import {
   setTlsMitm,
   scanNetwork,
   removeCaFromHost,
+  getCaStatus,
+  CaStatus,
   MitmStatus,
   NetworkDevice,
 } from '../../api/endpoints/mitm'
@@ -88,6 +90,22 @@ export function MitmPage() {
   // CA removal from THIS PC (post-test cleanup)
   const [caRemoving, setCaRemoving] = useState(false)
   const [caRemoveMsg, setCaRemoveMsg] = useState<string | null>(null)
+  // Trust state of the Nyx CA on this machine. `trusted: null` means the
+  // platform could not be queried — never show that as "not installed".
+  const [caStatus, setCaStatus] = useState<CaStatus | null>(null)
+
+  const refreshCaStatus = async () => {
+    try {
+      setCaStatus(await getCaStatus())
+    } catch {
+      setCaStatus(null)
+    }
+  }
+
+  useEffect(() => {
+    refreshCaStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // All persistent UI state comes from the store
   const {
@@ -256,6 +274,8 @@ export function MitmPage() {
     try {
       const res = await removeCaFromHost()
       setCaRemoveMsg(res.message)
+      // Re-read the stores instead of trusting the removal response alone.
+      await refreshCaStatus()
     } catch (e: any) {
       setCaRemoveMsg(e.response?.data?.detail || e.message || 'Failed to remove the CA')
     } finally {
@@ -1098,6 +1118,12 @@ export function MitmPage() {
             Trusting the Nyx CA disables TLS integrity checks for it. Remove it
             from every device that installed it as soon as testing is over.
           </p>
+          <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+            The CA belongs on the <span className="text-gray-300">target</span>:
+            open the portal from the device and install it there. Installing it
+            on this PC is optional (only needed to browse through Nyx from this
+            machine) and is never done automatically by Nyx.
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
             <div className="text-xs text-gray-400 space-y-1.5">
               <p className="text-gray-300 font-medium">Android</p>
@@ -1113,6 +1139,17 @@ export function MitmPage() {
             </div>
             <div className="text-xs text-gray-400 space-y-1.5">
               <p className="text-gray-300 font-medium">This PC</p>
+              <p className="text-[11px]">
+                {caStatus === null
+                  ? 'Checking CA trust on this PC…'
+                  : caStatus.trusted === null
+                    ? 'CA trust on this PC: unknown (stores unreadable)'
+                    : caStatus.trusted
+                      ? `CA installed on this PC — ${Object.entries(caStatus.stores)
+                          .map(([store, count]) => `${store}: ${count}`)
+                          .join(', ')}`
+                      : 'CA not installed on this PC'}
+              </p>
               <button
                 onClick={handleRemoveCa}
                 disabled={caRemoving}

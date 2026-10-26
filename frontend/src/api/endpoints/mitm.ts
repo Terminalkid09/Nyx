@@ -86,7 +86,29 @@ export async function getCaCertUrl(): Promise<string> {
   return '/api/ca-certificate'
 }
 
-export async function removeCaFromHost(): Promise<{ status: string; message: string }> {
-  const { data } = await apiClient.post('/api/ca/remove')
+export interface CaStatus {
+  platform: string
+  trusted: boolean | null
+  inconclusive: boolean
+  stores: Record<string, number>
+  detail: string
+  certificate: string | null
+}
+
+export async function getCaStatus(): Promise<CaStatus> {
+  const { data } = await apiClient.get<CaStatus>('/api/ca/status')
+  return data
+}
+
+export interface CaRemovalResult {
+  status: string
+  message: string
+  removed: boolean
+  still_present: string[]
+  stores: Record<string, { before?: number | null; after?: number | null }>
+}
+
+export async function removeCaFromHost(): Promise<CaRemovalResult> {
+  const { data } = await apiClient.post<CaRemovalResult>('/api/ca/remove')
   return data
 }

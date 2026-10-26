@@ -262,6 +262,32 @@ class TestMITMStartValidation:
             resp = await client.post("/api/mitm/start", json={})
         assert resp.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_start_refuses_without_admin(self, monkeypatch):
+        """Without Administrator, /start must explain instead of raising 500."""
+        from unittest.mock import MagicMock
+
+        from fastapi import HTTPException
+
+        from api.routes import mitm as mitm_mod
+
+        engine = MagicMock()
+        engine.mode = "regular"
+        engine.port = 8080
+        monkeypatch.setattr(mitm_mod, "_engine", engine)
+        monkeypatch.setattr(mitm_mod, "_is_admin", lambda: False)
+        for attr in ("_spoofer", "_dns_spoofer", "_ndp_spoofer", "_dhcp_spoofer"):
+            monkeypatch.setattr(mitm_mod, attr, None)
+
+        with pytest.raises(HTTPException) as exc:
+            await mitm_mod.mitm_start(
+                mitm_mod.MITMStartRequest(target_ips=["192.168.1.50"])
+            )
+
+        assert exc.value.status_code == 400
+        assert "Administrator" in exc.value.detail
+        assert "Stealth Mode" in exc.value.detail
+
 
 class TestSetupTransparentRedirect:
     def test_linux_enable_commands(self):
