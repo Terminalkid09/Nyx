@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db
 from core.storage.models import Session, TargetScopeRule
+from modules.importer import burp as burp_import
 from modules.importer.openapi import (
     MAX_DOCUMENT_BYTES,
     OpenAPIImportError,
@@ -30,6 +31,14 @@ router = APIRouter(prefix="/api/import", tags=["import"])
 class OpenAPIImportRequest(BaseModel):
     # The document is the payload: JSON or YAML, as text.
     document: str = Field(min_length=2, max_length=MAX_DOCUMENT_BYTES)
+    filename: str | None = None
+    session_id: uuid.UUID | None = None
+    apply_scope: bool = False
+
+
+class BurpImportRequest(BaseModel):
+    # A Burp Suite item export, as XML text.
+    document: str = Field(min_length=2, max_length=burp_import.MAX_DOCUMENT_BYTES)
     filename: str | None = None
     session_id: uuid.UUID | None = None
     apply_scope: bool = False
@@ -91,4 +100,29 @@ async def import_openapi(
                 400, detail="session_id is required when apply_scope is true"
             )
         result["scope"] = await _apply_scope(db, body.session_id, document.servers)
+    return result
+
+
+@router.post("/burp")
+async def import_burp(
+    body: BurpImportRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Turn a Burp XML export into the same inventory shape as ``/openapi``."""
+    try:
+        document = burp_import.parse_document(body.document)
+    except burp_import.BurpImportError as exc:
+        raise HTTPException(400, detail=str(exc))
+
+    result = burp_import.inventory(document, body.filename)
+    if body.apply_scope:
+        if body.session_id is None:
+            raise HTTPException(
+                400, detail="session_id is required when apply_scope is true"
+            )
+        # ``_apply_scope`` expects URLs because it reuses the OpenAPI server
+        # parsing; Burp only records the host, so give it a scheme to split.
+        result["scope"] = await _apply_scope(
+            db, body.session_id, tuple(f"https://{host}" for host in document.hosts)
+        )
     return result
