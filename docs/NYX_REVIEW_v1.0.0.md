@@ -136,6 +136,44 @@ durante gli sweep era BUG-21 (endpoint `settings/proxy`) più BUG-25
 frontend `tsc --noEmit` pulito, **19 test**, build ok; riprova live di gate
 token, import OpenAPI/Burp e `PATCH` su finding inesistente (404).
 
+**Docker, provato per davvero** (non solo `docker compose config`): stack
+costruito e avviato su Postgres con nginx davanti. Servivano quattro fix, tutti
+invisibili senza un `up` reale:
+
+1. `asyncpg` non era nelle dipendenze mentre `DATABASE_URL` puntava a
+   `postgresql+asyncpg`: il backend non poteva aprire una connessione.
+2. pip 23.0.1 dell'immagine `python:3.10-slim` esplorava ogni release di alembic
+   per 15+ minuti senza convergere; l'immagine ora aggiorna pip prima di
+   installare.
+3. la migrazione iniziale creava indici btree su colonne JSON
+   (`request_headers`/`response_headers`), che Postgres rifiuta: la migrazione
+   si fermava prima di creare le tabelle.
+4. `psutil` mancava e `/health` rispondeva 500 — proprio l'endpoint che la
+   shell desktop interroga a ogni avvio; mancava anche `pydivert`, ora incluso
+   solo per Windows.
+
+In più il frontend non poteva essere costruito: il Dockerfile copia `.npmrc`
+ma il file non era mai stato committato (`npm ci` senza `legacy-peer-deps`
+rifiuta l'albero). Verificato dopo i fix: `/health` 200, SPA 200,
+`GET`/`POST /api/sessions` 200 attraverso nginx, WebSocket su `ws://127.0.0.1/ws/traffic`
+connesso e `ping` ok. La rete del compose ora è sovrascrivibile
+(`NYX_DOCKER_SUBNET` + `TRUSTED_PROXY_CIDRS`) perché un /24 fisso collide con
+qualsiasi altro network dell'host.
+
+**Shell desktop e token per-boot**: backend impacchettato con PyInstaller
+(EXE ricostruito) e app compilata con electron-builder (`--dir`). L'EXE
+pacchettizzato ha `requireAdministrator`, quindi non è avviabile da questa
+sessione non elevata (`Permission denied`); il ponte è stato perciò provato con
+il backend impacchettato su `127.0.0.1:8000` e la shell Electron vera che carica
+la UI costruita. Risultato: `/api/sessions` senza header **403**, con il token
+**200**, `session.token` scritto in `NYX_HOME`, e il log del backend mostra le
+chiamate del renderer (`/api/sessions`, `/api/proxy/session`, `/api/pipeline`,
+`/api/recommendations/stats`) tutte **200** — il token viene allegato davvero
+via preload/IPC. Nell'occasione è emerso che il ramo di errore della shell
+chiamava `.then()` su `dialog.showErrorBox` (sincrona, ritorna `undefined`):
+l'eccezione saltava `app.quit()` lasciando la finestra su un backend morto.
+Corretto. Resta da ripetere l'avvio dell'EXE in una sessione elevata.
+
 **Ancora aperto (nostro)**: import di una sessione ZAP, AP Range multi-BSSID e
 shaping per client, mobile kit (F-06), plugin SDK (F-10). I numeri di §0.1 e
 §0.2 sono lo snapshot di quelle sessioni; i valori correnti sono in §2.
@@ -852,7 +890,7 @@ curl -s 'http://127.0.0.1:8000/api/automations/reports/..%2F..%2Fpackage.json'
 - [x] SEC-03: Host/Origin/Sec-Fetch-Site validati; `/api/auth/key` non risponde a richieste browser; token per-boot in build pacchettizzata
 - [x] SEC-04: escaping prima del replace nel Fuzzer
 - [x] SEC-06: README e threat model coerenti con l'implementazione reale
-- [ ] SEC-07: `docker compose up` → dashboard carica dati e WebSocket connesso
+- [x] SEC-07: `docker compose up` → dashboard carica dati e WebSocket connesso
 - [x] BUG-01: janitor per timestamp con test
 - [x] BUG-02: dedupe con parametro con test
 - [x] `pytest` pulito verde senza flag

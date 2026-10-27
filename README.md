@@ -519,6 +519,17 @@ docker compose up --build -d
 | **Proxy** | `127.0.0.1:8080` (configure your browser) |
 | **API** | [http://localhost:8000](http://localhost:8000) |
 
+The stack pins its bridge network to `172.28.0.0/24` so nginx is the only
+trusted proxy, and the backend accepts unauthenticated API calls from exactly
+that range. If another Docker network already owns the range, `up` fails with
+*"Pool overlaps with other one on this address space"*: pick a free one and
+set both variables to it.
+
+```bash
+NYX_DOCKER_SUBNET=172.30.0.0/24 TRUSTED_PROXY_CIDRS=172.30.0.0/24 \
+  docker compose up --build -d
+```
+
 ### Source (development)
 
 ```bash
