@@ -2,14 +2,20 @@
 
 Generata da `.live_test/build_matrix.py` contro `http://127.0.0.1:8000`.
 
-- Operazioni registrate e sondate: **291**
-- Con almeno un riferimento nei test: **114** (39%)
+- Operazioni registrate e sondate: **280**
+- Con almeno un riferimento nei test: **114** (40%)
 - Risposte 5xx dal live: **0**
 - Backend caduto durante lo sweep: **no**
 
 Colonna `live`: `GET` reale per gli endpoint di lettura, `OPTIONS` per gli altri (nessun effetto collaterale). Gli endpoint che cambiano lo stato della macchina sono marcati `skip`.
 
 ## Dettaglio per router
+
+### `ab_test` — 1 operazioni, 0 senza test
+
+| Metodo | Path | Test | Live |
+|---|---|---|---|
+| POST | `/api/ab-test/run` | sì | 405 |
 
 ### `active_scanner` — 2 operazioni, 0 senza test
 
@@ -129,12 +135,14 @@ Colonna `live`: `GET` reale per gli endpoint di lettura, `OPTIONS` per gli altri
 | POST | `/api/comparer/items` | sì | 405 |
 | DELETE | `/api/comparer/items/{item_id}` | sì | 405 |
 
-### `compliance` — 5 operazioni, 0 senza test
+### `compliance` — 7 operazioni, 0 senza test
 
 | Metodo | Path | Test | Live |
 |---|---|---|---|
 | GET | `/api/compliance/full` | sì | 200 |
 | GET | `/api/compliance/gdpr` | sì | 200 |
+| GET | `/api/compliance/iso27001` | sì | 200 |
+| GET | `/api/compliance/nis2` | sì | 200 |
 | GET | `/api/compliance/owasp` | sì | 200 |
 | GET | `/api/compliance/pci-dss` | sì | 200 |
 | GET | `/api/compliance/status` | sì | 200 |
@@ -209,6 +217,13 @@ Colonna `live`: `GET` reale per gli endpoint di lettura, `OPTIONS` per gli altri
 | GET | `/api/fuzzer/processors` | no | 200 |
 | GET | `/api/fuzzer/wordlists` | no | 200 |
 
+### `imports` — 2 operazioni, 0 senza test
+
+| Metodo | Path | Test | Live |
+|---|---|---|---|
+| POST | `/api/import/burp` | sì | 405 |
+| POST | `/api/import/openapi` | sì | 405 |
+
 ### `inspector` — 3 operazioni, 3 senza test
 
 | Metodo | Path | Test | Live |
@@ -255,41 +270,17 @@ Colonna `live`: `GET` reale per gli endpoint di lettura, `OPTIONS` per gli altri
 | PUT | `/api/match-replace/{rule_id}/test` | sì | 405 |
 | PATCH | `/api/match-replace/{rule_id}/toggle` | sì | 405 |
 
-### `mitm` — 15 operazioni, 5 senza test
+### `mitm` — 7 operazioni, 2 senza test
 
 | Metodo | Path | Test | Live |
 |---|---|---|---|
-| GET | `/api/mitm/packets` | sì | 200 |
-| GET | `/api/mitm/packets/{seq}` | sì | 422 |
 | GET | `/api/mitm/portal` | no | 200 |
 | GET | `/api/mitm/portal/checkin` | no | 200 |
-| GET | `/api/mitm/quic` | sì | skip — skipped (unsafe) |
-| POST | `/api/mitm/quic` | sì | skip — skipped (unsafe) |
 | GET | `/api/mitm/scan-network` | sì | skip — skipped (unsafe) |
 | POST | `/api/mitm/start` | sì | skip — skipped (unsafe) |
 | GET | `/api/mitm/status` | sì | 200 |
 | POST | `/api/mitm/stop` | sì | skip — skipped (unsafe) |
 | POST | `/api/mitm/tls` | sì | skip — skipped (unsafe) |
-| GET | `/api/mitm/udp` | sì | skip — skipped (unsafe) |
-| POST | `/api/mitm/udp/clear` | no | skip — skipped (unsafe) |
-| POST | `/api/mitm/udp/rules` | no | skip — skipped (unsafe) |
-| DELETE | `/api/mitm/udp/rules/{index}` | no | skip — skipped (unsafe) |
-
-### `network` — 11 operazioni, 2 senza test
-
-| Metodo | Path | Test | Live |
-|---|---|---|---|
-| POST | `/api/network/capture/start` | sì | skip — skipped (unsafe) |
-| POST | `/api/network/capture/stop` | sì | skip — skipped (unsafe) |
-| GET | `/api/network/export` | sì | skip — skipped (unsafe) |
-| GET | `/api/network/frames` | sì | 200 |
-| GET | `/api/network/interfaces` | no | 200 |
-| GET | `/api/network/packets` | sì | 200 |
-| GET | `/api/network/packets/{seq}` | sì | 422 |
-| GET | `/api/network/quic` | no | 200 |
-| GET | `/api/network/status` | sì | 200 |
-| GET | `/api/network/streams` | sì | 200 |
-| GET | `/api/network/streams/{stream_id}/frames` | sì | 200 |
 
 ### `organizer` — 7 operazioni, 7 senza test
 
@@ -381,16 +372,18 @@ Colonna `live`: `GET` reale per gli endpoint di lettura, `OPTIONS` per gli altri
 | GET | `/api/requests/export/har` | sì | skip — skipped (unsafe) |
 | GET | `/api/requests/{request_id}` | sì | 404 |
 
-### `roe` — 6 operazioni, 6 senza test
+### `roe` — 8 operazioni, 0 senza test
 
 | Metodo | Path | Test | Live |
 |---|---|---|---|
-| GET | `/api/roe` | no | 200 |
-| POST | `/api/roe` | no | 405 |
-| GET | `/api/roe/{profile_id}` | no | 404 |
-| POST | `/api/roe/{profile_id}/activate` | no | 405 |
-| POST | `/api/roe/{profile_id}/deactivate` | no | 405 |
-| POST | `/api/roe/{profile_id}/verify` | no | 405 |
+| GET | `/api/roe` | sì | 200 |
+| POST | `/api/roe` | sì | 405 |
+| DELETE | `/api/roe/{profile_id}` | sì | 405 |
+| GET | `/api/roe/{profile_id}` | sì | 404 |
+| PUT | `/api/roe/{profile_id}` | sì | 405 |
+| POST | `/api/roe/{profile_id}/activate` | sì | 405 |
+| POST | `/api/roe/{profile_id}/deactivate` | sì | 405 |
+| POST | `/api/roe/{profile_id}/verify` | sì | 405 |
 
 ### `scan_jobs` — 7 operazioni, 0 senza test
 
@@ -486,12 +479,13 @@ Colonna `live`: `GET` reale per gli endpoint di lettura, `OPTIONS` per gli altri
 | GET | `/api/settings/proxy` | sì | skip — skipped (unsafe) |
 | PUT | `/api/settings/proxy` | sì | skip — skipped (unsafe) |
 
-### `smart_triage` — 4 operazioni, 0 senza test
+### `smart_triage` — 5 operazioni, 0 senza test
 
 | Metodo | Path | Test | Live |
 |---|---|---|---|
 | GET | `/api/triage/findings/grouped` | sì | 422 |
 | GET | `/api/triage/findings/recent` | sì | 422 |
+| PATCH | `/api/triage/findings/{finding_id}` | sì | 405 |
 | GET | `/api/triage/findings/{finding_id}/retest` | sì | 404 |
 | GET | `/api/triage/stats` | sì | 422 |
 

@@ -41,10 +41,11 @@
 | **Traffic interception** | ARP spoofing (zero-config LAN MITM), transparent proxy, regular forward proxy, WebSocket capture |
 | **Vulnerability scanning** | 210+ passive checks, 110+ active probes, custom regex checks, content discovery, JS-aware crawler |
 | **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
-| **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
+| **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling, A/B replay (two identities + anonymous leg) |
+| **API inventory** | OpenAPI 2.0/3.x documents and Burp XML exports become an endpoint inventory with contract warnings, optionally added to the session scope |
 | **OAST** | Self-hosted Collaborator server (Go) for blind XXE/SSRF/DNS exfiltration detection |
 | **Advanced MITM** | ARP/DHCP/NDP spoofing with auto-fallback, rogue-DHCP-first stealth mode with post-stop lease healing (targets recover in seconds), **reactive ARP** (sniff-and-reply, undetectable), **RA spoofing (IPv6)**, **WiFi AP mode** (rogue hotspot — the target connects to you, zero spoofing), network device discovery, always-on CA portal with QR install, QUIC/HTTP3 blocking, gRPC parsing (native C++ module) |
-| **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
+| **Smart Triage** | Severity-based finding grouping, retest with the outcome recorded, operator severity override, false-positive dismissal (hidden from reports, evidence kept) |
 | **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
 | **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32, NIS2 Art. 21(2) and ISO/IEC 27001:2022 Annex A reports auto-generated from findings; measures a scan cannot evidence are marked NOT ASSESSED instead of passing |
@@ -777,6 +778,12 @@ python nyx_cli.py import openapi spec.yaml --out inventory.json
 python nyx_cli.py import openapi spec.yaml --fail-on medium   # CI gate on warnings
 ```
 
+A Burp Suite XML item export is read into the same inventory by
+`POST /api/import/burp` (`{"document": "<xml text>"}`): requests are
+deduplicated by method and path, so a history with 400 hits on `/api/users`
+becomes one endpoint, and the captured query parameters are kept. The UI
+(**Import API**) offers both formats side by side.
+
 The same inventory is available over HTTP with `POST /api/import/openapi`
 (`{"document": "<spec text>", "session_id": "<uuid>", "apply_scope": true}`).
 With `apply_scope` each server declared by the document becomes an `include`
@@ -802,6 +809,7 @@ The reply is a verdict — `suspected_idor`, `isolated`, `review`,
 signals behind it and every sample. Per-response tokens (CSRF nonces, long
 ids) are normalised before comparing, so a rotated nonce does not look like an
 isolation. The request goes through the same scope/RoE gate as any other probe.
+The same comparison runs from the **A/B Test** page in the UI.
 
 ### Prometheus Metrics
 

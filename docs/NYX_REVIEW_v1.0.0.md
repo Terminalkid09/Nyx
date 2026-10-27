@@ -30,7 +30,8 @@ Legenda: **FATTO** = codice + test verdi; **PARZIALE** = nucleo implementato, UI
 | v1.3 | Import OpenAPI 2.0/3.x (inventario endpoint + warning di contratto, API `POST /api/import/openapi`, comando `nyx import openapi`, applicazione dei server allo scope di sessione) | FATTO |
 | v1.3 | Multi-ruolo A/B (`POST /api/ab-test/run`: due set di header + gamba anonima, diff normalizzato → `suspected_idor`/`isolated`/`unauthenticated_access`; nucleo senza UI) | FATTO (nucleo) |
 | v1.3 | Report NIS2 Art. 21(2) e ISO/IEC 27001:2022 Annex A (mapping dai finding, stato `NOT_ASSESSED` per le misure non osservabili, endpoint `/api/compliance/nis2|iso27001`, tab nella pagina Compliance) | FATTO |
-| v1.3 residuo | Import Burp/ZAP, UI A/B | APERTO |
+| v1.3 | UI multi-ruolo A/B, pagina Import API (OpenAPI + Burp XML), triage con falso positivo, override di severità e retest registrato | FATTO |
+| v1.3 residuo | Import di una sessione ZAP (formato a database, non un export piatto) | APERTO |
 | v2.0 | AP Range: allowlist MAC, `macaddr_acl=1`, DHCP `tag:!known`, rifiuto allowlist vuota, Linux-only | PARZIALE (config/validazione, senza multi-BSSID/shaping) |
 | v2.0 residuo | F-05 Sensor, F-06 mobile kit, F-08 import PCAP, F-09 QUIC visibility, F-10 plugin SDK | APERTO |
 | Network layer (TT) | NET-01, NET-02, F-05, F-08, F-09 | Non toccati (perimetro dell'altro maintainer) |
@@ -109,6 +110,38 @@ durante gli sweep era BUG-21 (endpoint `settings/proxy`) più BUG-25
 
 ---
 
+### 0.3 Sessione del 27 ottobre 2026 — workflow chiuso, numeri riallineati
+
+**Chiuso**
+
+- **SEC-03b**: token per-boot scritto in `NYX_HOME/session.token`, imposto
+  dalla shell solo nelle build pacchettizzate; il renderer lo riceve via IPC e
+  lo allega a ogni chiamata, con retry singolo dopo un riavvio del backend.
+- **UI multi-ruolo A/B** (`/ab-test`) e **pagina Import API** (`/import`):
+  entrambe le funzionalità avevano solo endpoint e CLI, quindi non erano
+  raggiungibili dall'interfaccia.
+- **Triage**: `PATCH /api/triage/findings/{id}` registra stato e override di
+  severità; il falso positivo esce dalla vista raggruppata e dai report ma
+  conserva l'evidenza; il retest registra l'esito e passa dal gate scope/RoE
+  (prima re-inviava la richiesta senza alcun controllo).
+- **Import Burp XML**: `POST /api/import/burp` produce lo stesso inventario
+  dell'import OpenAPI, deduplicando per (method, path) e conservando i
+  parametri di query; DOCTYPE/ENTITY vengono rifiutati prima del parser.
+- **Migrazione** `a3f1c9d7b2e4` per `triage_status`/`severity_override`,
+  verificata in upgrade, downgrade e nuovo upgrade su un DB creato da Alembic.
+- **Matrice rigenerata**: 280 operazioni, 114 con un riferimento nei test
+  (40%), **0 risposte 5xx**, 0 processi morti.
+
+**Verifica**: backend `python -m pytest -q` → **1112 passed, 1 skipped**;
+frontend `tsc --noEmit` pulito, **19 test**, build ok; riprova live di gate
+token, import OpenAPI/Burp e `PATCH` su finding inesistente (404).
+
+**Ancora aperto (nostro)**: import di una sessione ZAP, AP Range multi-BSSID e
+shaping per client, mobile kit (F-06), plugin SDK (F-10). I numeri di §0.1 e
+§0.2 sono lo snapshot di quelle sessioni; i valori correnti sono in §2.
+
+---
+
 ## 1. Executive summary (la versione da 5 minuti)
 
 Nyx a v1.0.0 **non è un progetto amatoriale**. È un prodotto con architettura reale: 24 moduli backend, 138 check attivi registrati, 211 file di check passivi, ~1200 test, CI, threat model, Electron hardened. Il livello medio del codice è alto e i commenti che spiegano i bug passati ("perché `local=False` su WinDivert", "perché `create_all` dopo alembic") sono documentazione di guerra che vale più di mille righe di README.
@@ -126,20 +159,22 @@ I problemi sono di **natura diversa**: il progetto è cresciuto più velocemente
 
 ## 2. Stato del progetto in numeri
 
+Valori rimisurati il 27 ottobre 2026.
+
 | Area | Misura |
 |---|---|
 | Backend Python | 583 file, ~57.500 righe |
 | Frontend React/TS | 109 file, ~22.000 righe |
 | Check passivi | 212 file in `backend/modules/scanner/passive/checks/` |
-| Check attivi | 135 file, **138 registrati** in `scanner.py` |
-| Test | 66 file, **1205 test**, ~92 s |
+| Check attivi | 135 file, **138 registrati** dal registry automatico |
+| Test | 82 file, **1113 test** (1112 passed, 1 skipped), ~63 s |
 | Moduli backend | 24 package in `backend/modules/` |
 | Collaborator (OAST) | 6 file Go, ~650 righe |
 | Modulo nativo | 2 file C++ (parser gRPC) |
-| File più grandi | `api/routes/mitm.py` 1250, `core/proxy/engine.py` 1097, `main.py` 617 |
-| Funzione più lunga | `_mitm_start_locked` — **358 righe** |
-| `except Exception: pass/continue` | **243** occorrenze |
-| `print()` nel backend | 31 |
+| File più grandi | `core/proxy/engine.py` 1155, `api/routes/mitm.py` 901, `main.py` 554 |
+| Funzione più lunga | `_mitm_start_locked` — **369 righe** |
+| `except Exception:` nudi (senza test) | **236** occorrenze |
+| `print()` nel backend | **13**, solo in `nyx_cli.py` |
 
 **I claim del README sono onesti** (210+ passive, 110+ active, 900+ test): verificati per conteggio. È raro e va detto.
 
@@ -494,14 +529,14 @@ job.results = results_list   # request+response COMPLETI in una colonna JSON
 
 | Voce | Misura | Rischio |
 |---|---|---|
-| `except Exception: pass` | 243 | errori inghiottiti: difficile capire perché una cattura manca |
-| `api/routes/mitm.py` | 1250 righe, funzione da 358 | ogni modifica al MITM rischia regressioni su ARP/DHCP/AP/firewall |
-| `main.py::lifespan` | 235 righe | startup non testabile, ordine degli effetti implicito |
-| Registrazione check | 148 import manuali + `_build_checks` 152 righe | aggiungere un check = 3 modifiche; check sovrapposti (`nosql_injection` vs `nosqli`, `ssti` vs `ssti_injection`, `xpath_injection` vs `xpath_injection_active`) → finding duplicati |
-| `print()` nel backend | 31 | log non strutturati in mezzo ai `logger.*` |
-| `pytest.ini` | assente | `pytest` locale fallisce; CI passa solo per il flag |
+| `except Exception:` nudi | 236 (esclusi i test) | errori inghiottiti: difficile capire perché una cattura manca |
+| `api/routes/mitm.py` | 901 righe, funzione da 369 | ogni modifica al MITM rischia regressioni su ARP/DHCP/AP/firewall |
+| `main.py::lifespan` | 170 righe | startup non testabile, ordine degli effetti implicito |
+| Registrazione check | risolta: discovery per classe, 138 check da 135 file, un superseded dichiarato | aggiungere un check ora è un solo file |
+| `print()` nel backend | 13, tutti in `nyx_cli.py` | nessun log non strutturato nel servizio |
+| `pytest.ini` | presente (`asyncio_mode = auto`) | risolto |
 | Copertura | nessuna soglia in CI | nulla impedisce che le parti nuove scendano sotto la media |
-| Attribuzione sessioni | `nyx.db` in root **e** in `backend/` | `DATABASE_URL` relativo alla CWD (BUG-08) |
+| Attribuzione sessioni | risolta (BUG-08) | `DATABASE_URL` è ancorato a una directory stabile |
 
 **Interventi a basso costo, alto ritorno**
 
@@ -684,13 +719,13 @@ Protocollo: chi tocca un file conteso apre una PR piccola (max ~150 righe) e avv
 Obiettivo: chiudere i P0 e i P1 che bloccano una release credibile. **Un ticket per persona alla volta**, review incrociata obbligatoria.
 
 **CL**
-- [ ] SEC-01 command injection WiFi AP + test (2-3 h)
-- [ ] SEC-02 path traversal report + test (1 h)
+- [x] SEC-01 command injection WiFi AP + test (2-3 h)
+- [x] SEC-02 path traversal report + test (1 h)
 - [x] SEC-03 auth hardening: Host/`Sec-Fetch-Site`/token per-boot (4-6 h)
-- [ ] BUG-01 janitor per timestamp + test (2 h)
-- [ ] SEC-04 escaping Fuzzer (1 h)
-- [ ] SEC-06 allineare README/threat model alla realtà encryption (2 h)
-- [ ] BUG-02 dedupe con parametro (2 h)
+- [x] BUG-01 janitor per timestamp + test (2 h)
+- [x] SEC-04 escaping Fuzzer (1 h)
+- [x] SEC-06 allineare README/threat model alla realtà encryption (2 h)
+- [x] BUG-02 dedupe con parametro (2 h)
 
 **TT**
 - [ ] SEC-07 Docker: iniezione API key + porte WS + test `docker compose up` (4-6 h)
@@ -812,16 +847,16 @@ curl -s 'http://127.0.0.1:8000/api/automations/reports/..%2F..%2Fpackage.json'
 
 ## 18. Appendice B — Checklist P0 prima della release
 
-- [ ] SEC-01: SSID/passphrase validati, `shell=False`, test di injection verdi
-- [ ] SEC-02: `resolve()` + `relative_to()` + `name` check, test traversal verdi
+- [x] SEC-01: SSID/passphrase validati, `shell=False`, test di injection verdi
+- [x] SEC-02: `resolve()` + `relative_to()` + `name` check, test traversal verdi
 - [x] SEC-03: Host/Origin/Sec-Fetch-Site validati; `/api/auth/key` non risponde a richieste browser; token per-boot in build pacchettizzata
-- [ ] SEC-04: escaping prima del replace nel Fuzzer
-- [ ] SEC-06: README e threat model coerenti con l'implementazione reale
+- [x] SEC-04: escaping prima del replace nel Fuzzer
+- [x] SEC-06: README e threat model coerenti con l'implementazione reale
 - [ ] SEC-07: `docker compose up` → dashboard carica dati e WebSocket connesso
-- [ ] BUG-01: janitor per timestamp con test
-- [ ] BUG-02: dedupe con parametro con test
-- [ ] `pytest` pulito verde senza flag
-- [ ] Nessun segreto in `git ls-files` (`.env`, `nyx.db`, `nyx.secret`, `*.pem`)
+- [x] BUG-01: janitor per timestamp con test
+- [x] BUG-02: dedupe con parametro con test
+- [x] `pytest` pulito verde senza flag
+- [x] Nessun segreto in `git ls-files` (`.env`, `nyx.db`, `nyx.secret`, `*.pem`)
 
 ---
 
