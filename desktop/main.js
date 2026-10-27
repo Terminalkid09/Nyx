@@ -171,10 +171,14 @@ function startBackend() {
     if (backendLogStream) { try { backendLogStream.end(); } catch {} backendLogStream = null; }
     if (code !== 0 && code !== null && !backendProcess.killed) {
       const detail = lastStderr.trim().slice(-200);
+      // showErrorBox is synchronous and returns undefined: chaining .then()
+      // on it threw inside the exit handler, so the dialog appeared but the
+      // app never quit and the window sat on a dead backend.
       dialog.showErrorBox(
         'Backend Error',
         `Nyx backend stopped unexpectedly (code ${code}).\n\nLog: ${logPath}\n\nLast error:\n${detail || '(no stderr output)'}`
-      ).then(() => app.quit());
+      );
+      app.quit();
     }
   });
   backendProcess.on('close', () => {
