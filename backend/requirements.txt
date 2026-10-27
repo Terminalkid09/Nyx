@@ -3,6 +3,9 @@ uvicorn[standard]>=0.29.0,<1.0.0
 mitmproxy==11.0.2
 sqlalchemy[asyncio]>=2.0.30,<3.0.0
 aiosqlite>=0.20.0,<1.0.0
+# The Docker stack points DATABASE_URL at Postgres; without this driver the
+# backend container cannot open a connection at startup.
+asyncpg>=0.29.0,<1.0.0
 alembic>=1.13.0,<2.0.0
 httpx>=0.27.0,<1.0.0
 pydantic>=2.7.0,<3.0.0
@@ -12,6 +15,12 @@ jinja2>=3.1.0,<4.0.0
 pyyaml>=6.0,<7.0
 weasyprint>=62.0,<64.0
 scapy>=2.5.0,<3.0.0
+# /health reports process memory through psutil; without it the endpoint the
+# desktop shell polls on every start returns 500 in a clean environment.
+psutil>=5.9.0,<8.0.0
+# Windows-only transparent transport (WinDivert). Guarded at the import site,
+# so Linux images and Docker skip it.
+pydivert>=3.0.0,<4.0.0; sys_platform == "win32"
 qrcode[pil]>=7.4.0
 
 # Optional: SQLCipher encrypted database (set NYX_SQLCIPHER_KEY to enable)

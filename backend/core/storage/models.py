@@ -85,8 +85,9 @@ class Request(Base):
     __table_args__ = (
         Index("ix_requests_session_timestamp", "session_id", "timestamp"),
         Index("ix_requests_host_method", "host", "method"),
-        Index("ix_requests_req_headers", "request_headers"),
-        Index("ix_requests_resp_headers", "response_headers"),
+        # Headers are JSON: a btree index over the blob never served a query and
+        # Postgres refuses it outright ("data type json has no default operator
+        # class"), which made the Docker stack impossible to start.
     )
 
 
