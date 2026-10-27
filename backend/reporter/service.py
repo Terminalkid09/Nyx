@@ -8,6 +8,8 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+SEVERITIES = ("critical", "high", "medium", "low", "info")
+
 
 class ReporterService:
     def __init__(self):
@@ -105,7 +107,12 @@ class ReporterService:
         from sqlalchemy import select, func
 
         async with AsyncSessionLocal() as db:
-            findings_query = select(Finding).where(Finding.session_id == session_uuid)
+            # Dismissed findings stay in the database so the evidence survives,
+            # but they must not reappear in the deliverable.
+            findings_query = select(Finding).where(
+                Finding.session_id == session_uuid,
+                Finding.triage_status != "false_positive",
+            )
             findings_query = findings_query.order_by(Finding.severity.desc())
             result = await db.execute(findings_query)
             findings = list(result.scalars().all())
@@ -116,7 +123,15 @@ class ReporterService:
 
         findings_dicts = [
             {
-                "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                # The triage override is the operator's final word: a finding
+                # re-rated to "low" must not come back as "critical" in the
+                # report the client reads.
+                "severity": (
+                    f.severity_override
+                    if f.severity_override in SEVERITIES
+                    else (f.severity.value if hasattr(f.severity, "value") else str(f.severity))
+                ),
+                "triage_status": f.triage_status,
                 "title": f.title,
                 "description": f.description,
                 "evidence": f.evidence,

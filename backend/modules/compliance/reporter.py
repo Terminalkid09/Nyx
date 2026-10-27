@@ -283,13 +283,23 @@ class ComplianceReportGenerator:
     async def _load_findings(self) -> list[dict]:
         if self._findings is not None:
             return self._findings
-        result = await self.db.execute(select(Finding))
+        # Dismissed findings must not count against a control: a false positive
+        # reported as a PCI failure is worse than no report at all. The
+        # operator's severity override travels too, so a re-rated finding is
+        # counted at the severity the assessor decided.
+        result = await self.db.execute(
+            select(Finding).where(Finding.triage_status != "false_positive")
+        )
         rows = result.scalars().all()
         self._findings = [
             {
                 "id": str(f.id),
                 "title": f.title,
-                "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                "severity": (
+                    f.severity_override
+                    if f.severity_override in ("critical", "high", "medium", "low", "info")
+                    else (f.severity.value if hasattr(f.severity, "value") else str(f.severity))
+                ),
                 "cwe": getattr(f, "cwe", None),
                 "description": getattr(f, "description", "") or "",
                 "host": getattr(f, "host", "") or "",

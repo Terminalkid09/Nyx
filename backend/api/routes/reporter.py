@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from api.deps import get_db
 from core.storage.models import Finding, Request
-from reporter.service import ReporterService
+from reporter.service import SEVERITIES, ReporterService
 import uuid
 
 router = APIRouter(prefix="/api/reports", tags=["reporter"])
@@ -17,7 +17,12 @@ async def generate_report(
     db: AsyncSession = Depends(get_db),
 ):
     findings_result = await db.execute(
-        select(Finding).where(Finding.session_id == session_id)
+        select(Finding).where(
+            Finding.session_id == session_id,
+            # Dismissed findings keep their evidence but do not ship: the
+            # report is the deliverable, the database is the work file.
+            Finding.triage_status != "false_positive",
+        )
     )
     findings = list(findings_result.scalars().all())
 
@@ -28,7 +33,12 @@ async def generate_report(
 
     findings_dicts = [
         {
-            "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+            "severity": (
+                f.severity_override
+                if f.severity_override in SEVERITIES
+                else (f.severity.value if hasattr(f.severity, "value") else str(f.severity))
+            ),
+            "triage_status": f.triage_status,
             "title": f.title,
             "description": f.description,
             "evidence": f.evidence,

@@ -108,6 +108,18 @@ class Finding(Base):
     cvss_score: Mapped[float | None] = mapped_column(nullable=True)
     cvss_vector: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Triage outcome. A finding stays in the database after being dismissed or
+    # retested — deleting it would lose the evidence and let the next scan
+    # report the same false positive again — so the workflow lives in these two
+    # columns. ``false_positive`` findings are excluded from reports and from
+    # the grouped triage view (unless explicitly requested).
+    triage_status: Mapped[str] = mapped_column(
+        String(16), default="open", server_default="open", nullable=False
+    )
+    # Operator override (false positives in the check, client risk acceptance).
+    # Reports use it in place of the scanner's own severity.
+    severity_override: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     session: Mapped["Session"] = relationship(back_populates="findings")
     request: Mapped["Request | None"] = relationship(back_populates="findings")
 

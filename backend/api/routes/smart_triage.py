@@ -1,30 +1,79 @@
 import uuid
 from datetime import datetime, timezone, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from api.deps import get_db
+from core.authorization import authorize
 from core.storage.models import Finding, Request
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
+
+TriageStatus = Literal["open", "confirmed", "needs_review", "fixed", "false_positive"]
+SEVERITIES = ("critical", "high", "medium", "low", "info")
+# Dismissed and fixed findings are history: they stay in the database (the
+# evidence is still useful) but out of the working list by default.
+CLOSED_STATUSES = ("false_positive", "fixed")
+
+
+def _effective_severity(f: Finding) -> str:
+    """Operator override wins over what the scanner decided."""
+    if f.severity_override in SEVERITIES:
+        return f.severity_override
+    return f.severity.value if hasattr(f.severity, "value") else str(f.severity)
+
+
+class FindingUpdate(BaseModel):
+    triage_status: TriageStatus | None = None
+    # ``None`` clears the override, a severity sets it.
+    severity: Literal["critical", "high", "medium", "low", "info"] | None = None
+    clear_severity_override: bool = False
+
+
+async def authorize_finding_target(
+    finding_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Retest re-sends a real request, so it must honour scope and RoE.
+
+    Without this the operator could probe a target the engagement no longer
+    covers just by pressing retest on an old finding.
+    """
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(404, detail="Finding not found")
+    req = await db.get(Request, finding.request_id)
+    if not req or not req.url:
+        raise HTTPException(400, detail="Associated request not found")
+
+    allowed, kind, detail = await authorize(finding.session_id, req.url)
+    if not allowed:
+        raise HTTPException(403, detail=f"Target not authorized ({kind}: {detail})")
 
 
 @router.get("/findings/grouped")
 async def get_grouped_findings(
     session_id: uuid.UUID = Query(..., description="Session to scope findings to"),
+    include_triaged: bool = Query(False, description="Also return dismissed/fixed findings"),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
+    query = (
         select(Finding)
         .where(Finding.session_id == session_id)
         .options(selectinload(Finding.request))
         .order_by(Finding.created_at.desc())
     )
+    if not include_triaged:
+        query = query.where(Finding.triage_status.notin_(CLOSED_STATUSES))
+    result = await db.execute(query)
     findings = result.scalars().all()
 
+    severity_order = {sev: index for index, sev in enumerate(SEVERITIES)}
     groups: dict[str, dict] = {}
     for f in findings:
         path = f.request.path if f.request else "/unknown"
@@ -33,7 +82,10 @@ async def get_grouped_findings(
             groups[key] = {
                 "key": key,
                 "title": f.title,
-                "severity": f.severity.value,
+                "severity": _effective_severity(f),
+                "severity_override": f.severity_override,
+                "triage_status": f.triage_status,
+                "finding_ids": [],
                 "count": 0,
                 "endpoint": path,
                 "host": (f.request.host or "") if f.request else "",
@@ -50,6 +102,13 @@ async def get_grouped_findings(
             }
         g = groups[key]
         g["count"] += 1
+        g["finding_ids"].append(str(f.id))
+        # A group inherits the worst effective severity of its members, so an
+        # override on one instance cannot hide the others.
+        if severity_order.get(_effective_severity(f), 99) < severity_order.get(g["severity"], 99):
+            g["severity"] = _effective_severity(f)
+        if f.severity_override and not g["severity_override"]:
+            g["severity_override"] = f.severity_override
         if f.request and f.request.request_body and not g["request_body"]:
             g["request_body"] = f.request.request_body
             g["method"] = f.request.method or g["method"]
@@ -63,13 +122,44 @@ async def get_grouped_findings(
         if seen > g["last_seen"]:
             g["last_seen"] = seen
 
-    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     sorted_groups = sorted(groups.values(), key=lambda g: severity_order.get(g["severity"], 99))
     return {"groups": sorted_groups}
 
 
+@router.patch("/findings/{finding_id}")
+async def update_finding(
+    finding_id: uuid.UUID,
+    body: FindingUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record a triage decision (dismiss, confirm, re-rate) without losing it."""
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(404, detail="Finding not found")
+
+    if body.clear_severity_override:
+        finding.severity_override = None
+    elif body.severity is not None:
+        finding.severity_override = body.severity
+    if body.triage_status is not None:
+        finding.triage_status = body.triage_status
+
+    await db.commit()
+    await db.refresh(finding)
+    return {
+        "id": str(finding.id),
+        "triage_status": finding.triage_status,
+        "severity": _effective_severity(finding),
+        "severity_override": finding.severity_override,
+    }
+
+
 @router.get("/findings/{finding_id}/retest")
-async def retest_finding(finding_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def retest_finding(
+    finding_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _authorized: None = Depends(authorize_finding_target),
+):
     finding = await db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(404, detail="Finding not found")
@@ -87,14 +177,25 @@ async def retest_finding(finding_id: uuid.UUID, db: AsyncSession = Depends(get_d
             resp = await client.request(method, req.url, headers=headers, content=body, timeout=10, follow_redirects=False)
             evidence = f"Re-ran {req.method} {req.url} -> {resp.status_code} ({len(resp.content)} bytes)"
 
-            is_fixed = resp.status_code != req.response_status if req.response_status else False
-            result = "confirmed"
-            if is_fixed:
-                result = "fixed"
+            # A different status is a signal, not proof: a WAF, a rate limit or
+            # a rotated token also change it. Only a response that still looks
+            # like the original confirms the finding; anything else goes back
+            # to the operator instead of being marked "fixed" on a guess.
+            if req.response_status and resp.status_code == req.response_status:
+                result = "confirmed"
+            else:
+                result = "needs_review"
+            finding.triage_status = result
+            await db.commit()
 
-            return {"result": result, "evidence": evidence, "status_code": resp.status_code}
+            return {
+                "result": result,
+                "evidence": evidence,
+                "status_code": resp.status_code,
+                "triage_status": finding.triage_status,
+            }
     except Exception as e:
-        return {"result": "error", "evidence": str(e)}
+        return {"result": "error", "evidence": str(e), "triage_status": finding.triage_status}
 
 
 @router.get("/stats")
@@ -195,7 +296,8 @@ async def get_recent_findings(
         {
             "id": str(f.id),
             "title": f.title,
-            "severity": f.severity.value,
+            "severity": _effective_severity(f),
+            "triage_status": f.triage_status,
             "method": f.request.method if f.request else "",
             "url": f.request.url if f.request else "",
             "status": f.request.response_status if f.request else None,
