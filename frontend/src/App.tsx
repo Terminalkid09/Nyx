@@ -63,6 +63,8 @@ const Metrics = lazyNamed(() => import('./components/Metrics/Metrics'), 'Metrics
 const RulesOfEngagement = lazyNamed(() => import('./components/RoE/RulesOfEngagement'), 'RulesOfEngagement')
 const AttackPath = lazyNamed(() => import('./components/AttackPath/AttackPath'), 'AttackPath')
 const Verifier = lazyNamed(() => import('./components/Verifier/Verifier'), 'Verifier')
+const AbTest = lazyNamed(() => import('./components/AbTest/AbTest'), 'AbTest')
+const Importer = lazyNamed(() => import('./components/Importer/Importer'), 'Importer')
 
 function RouteFallback() {
   return (
@@ -176,6 +178,8 @@ export default function App() {
                 <Route path="/roe" element={<RouteErrorBoundary><RulesOfEngagement /></RouteErrorBoundary>} />
                 <Route path="/attack-path" element={<RouteErrorBoundary><AttackPath /></RouteErrorBoundary>} />
                 <Route path="/verifier" element={<RouteErrorBoundary><Verifier /></RouteErrorBoundary>} />
+                <Route path="/ab-test" element={<RouteErrorBoundary><AbTest /></RouteErrorBoundary>} />
+                <Route path="/import" element={<RouteErrorBoundary><Importer /></RouteErrorBoundary>} />
                 </Routes>
               </Suspense>
             </main>

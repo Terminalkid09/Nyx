@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Settings2, AlertTriangle, FileText, Webhook, Lightbulb, ScrollText, GitBranch, BadgeCheck } from 'lucide-react'
+import { LayoutDashboard, Shield, Repeat, Search, Zap, Replace, PauseCircle, GitCompare, FileSearch, Key, Globe, Users, FolderOpen, Play, Activity, Compass, Radio, BookOpen, Search as SearchIcon, Monitor, Wifi, ChevronDown, Bug, Settings2, AlertTriangle, FileText, Webhook, Lightbulb, ScrollText, GitBranch, BadgeCheck, FileInput } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { SessionSwitcher } from './SessionSwitcher'
 
@@ -41,6 +41,8 @@ const navGroups = [
       { to: '/comparer', label: 'Comparer', icon: GitCompare, badgeKey: null },
       { to: '/auto-exploit', label: 'Auto Exploit', icon: Bug, badgeKey: null },
       { to: '/verifier', label: 'Exploit Verifier', icon: BadgeCheck, badgeKey: null },
+      { to: '/ab-test', label: 'A/B Test', icon: Users, badgeKey: null },
+      { to: '/import', label: 'Import API', icon: FileInput, badgeKey: null },
       { to: '/attack-path', label: 'Attack Path', icon: GitBranch, badgeKey: null },
       { to: '/ws-messages', label: 'WebSocket MSG', icon: Globe, badgeKey: null },
       { to: '/triage', label: 'Smart Triage', icon: AlertTriangle, badgeKey: null },
