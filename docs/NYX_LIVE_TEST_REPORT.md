@@ -126,7 +126,8 @@ solo? Docker serve? E cosa succede se una porta è già occupata?
 # backend + interfaccia (il desktop avvia da sé il backend)
 cd desktop && npx electron .
 
-# in un'altra shell
+# in un'altra shell (il target vulnerabile serve /.env con DB_PASSWORD)
+python .live_test/target.py &
 python .live_test/build_matrix.py
 python .live_test/endpoint_sweep.py
 python .live_test/write_sweep.py
