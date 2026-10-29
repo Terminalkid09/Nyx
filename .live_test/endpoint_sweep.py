@@ -81,10 +81,16 @@ def main() -> int:
             failures.append((path, "EXC", str(exc)[:120]))
             continue
         results[response.status_code] = results.get(response.status_code, 0) + 1
-        if response.status_code >= 400:
+        # 404/422 are the honest answers for the zero-UUID placeholders and for
+        # reads that need query parameters the sweep does not supply. Only a
+        # server error (or a method that the router does not accept at all,
+        # which usually means a mount swallowed the route) is a real failure.
+        if response.status_code >= 500 or response.status_code == 405:
             failures.append((path, response.status_code, response.text[:160]))
 
+    expected = results.get(404, 0) + results.get(422, 0)
     print("GET status distribution:", dict(sorted(results.items())))
+    print(f"expected placeholder answers: {expected} (404/422)")
     if failures:
         print(f"\nFAILURES ({len(failures)}):")
         for item in failures:
@@ -145,7 +151,7 @@ def main() -> int:
     client.delete(f"{BASE}/api/content-discovery/wordlists/sweep_list.txt")
     client.close()
 
-    bad = [c for c in checks if c[1] == "EXC" or (isinstance(c[1], int) and c[1] >= 500)]
+    bad = [c for c in checks if c[1] == "EXC" or (isinstance(c[1], int) and (c[1] >= 500 or c[1] == 405))]
     return 1 if failures or bad else 0
 
 

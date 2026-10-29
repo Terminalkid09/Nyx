@@ -420,13 +420,13 @@ Intercept traffic from any device on the same LAN **without configuring the targ
 **IPv6 targets** are handled with **RA (Router Advertisement) spoofing** — forged RAs elect Nyx as the target's IPv6 router legitimately, so IPv6 traffic is intercepted without NDP detection.
 
 **How to use:**
-1. Launch Nyx **as administrator**
+1. Launch Nyx with Administrator rights — the packaged Windows build asks through UAC; in a source checkout start it from an elevated shell
 2. **MITM** tab → click **Scan Network** to auto-discover all devices on LAN
 3. Check the devices to intercept (or type IP manually via text field + _Add_)
 4. Set gateway (auto-detected) → Toggle DNS spoofing if needed
 5. Click **Start Interception**
 6. If the target does not reconnect on its own (existing connection), the DHCP phase NAKs the target's renewal so it drops the old lease and re-negotiates — a fresh **DISCOVER** that Nyx can answer
-7. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
+7. Install the CA on the target: open `http://<NYX_IP>:18081` from the device (or scan the QR in the MITM tab); the portal follows the proxy if 18081 is taken
 8. **Stop Interception** when done
 
 > **💡 For already-connected devices:** a Wi-Fi **toggle** only renews the old lease directly with the router (which Nyx never sees). If the target is already connected, ask it to **"forget the network"** and rejoin — this forces a broadcast DISCOVER that the rogue DHCP server can win, or wait for the automatic ARP fallback.

@@ -29,8 +29,8 @@ un bug reale.
 | Operazioni con almeno un riferimento nei test | 96 prima del lavoro → **tutte le GET coperte** dal nuovo contract test |
 | Risposte 5xx live | **0** |
 | Flussi end-to-end | **17/17** |
-| Backend `pytest` | **1205 passed, 1 skipped** |
-| Frontend type-check / test / build | **0 errori / 35 passed / build ok** |
+| Backend `pytest` | **1121 passed, 1 skipped** (misurato il 29/10) |
+| Frontend type-check / test / build | **0 errori / 19 passed / build ok** (misurato il 29/10) |
 | Browser integrato (smoke) | **7/7** check |
 | Suite legacy in `tests/` | **83 passed** (prima: 5 failed) |
 | Avvio Electron + backend + SPA | ok, nessun errore nel log |
@@ -107,6 +107,48 @@ solo? Docker serve? E cosa succede se una porta è già occupata?
 | `modules/ca_portal.py` | La porta del portale CA poteva essere occupata da un altro listener (bind non esclusivo) e QR/status continuavano a puntare a 18081 | Server con bind esclusivo, port walk 18081→18082, `active_port()` usato da QR, `/api/mitm/status` e DeployBox |
 | `modules/mitm_status.py`, `api/routes/system.py` | I due costruttori di URL usavano `DEFAULT_PORT` invece della porta reale | Usano `active_port()` / `portal.lan_port` |
 
+## Quarta passata: app reale e copertura delle funzioni (29 ottobre 2026)
+
+Questa passata avvia **Nyx stessa** (`cd desktop && npx electron .`), non un
+backend a mano, su una macchina dove la 8000 e la 8080 erano occupate da altri
+programmi. Lo shell ha scelto **API 8001** e **proxy 8082**, e tutto il resto è
+stato verificato contro quel processo.
+
+| Verifica | Esito |
+|---|---|
+| Avvio shell + backend | `[nyx] API port 8000 busy -> 8001`, `[nyx] proxy port 8080 busy -> 8082`, SPA `200 text/html` con bundle caricato |
+| WebSocket `/ws/traffic` | accettato con `Origin: http://127.0.0.1:8001`; rifiutato `403` con `Origin: http://evil.example` |
+| Coerenza porte | `/api/settings/proxy` → `8082`, `/health` → `proxy.port 8082`, `/api/mitm/status` → `proxy_port 8082`, `ca_portal_port 18081`, `ca_portal_url` con la LAN reale |
+| Flussi e2e sul backend dello shell | **17/17** (proxy capture → request salvata → 13 finding passivi → scan attivo + persistenza → repeater → custom check → crawler → content discovery → auth scan → fuzzer 69 richieste → decoder → comparer → organizer) |
+| `endpoint_sweep` | **0 risposte 5xx**; 404/422 sono le risposte corrette per gli ID placeholder (ora distinte dalle failure); i 429 comparsi martellando gli endpoint sono il rate limiter locale |
+| `write_sweep` | nessun 5xx (38×200, 14×201, 17×400, 37×404, 6×422) |
+| `privileged_sweep` (non elevato) | **23/23**: validazione + rollback di `PUT /api/settings/proxy`, toggle TLS, `scan-network` (12 device reali), `POST /api/mitm/start` → **400** con spiegazione e porta reale 8082, CA status/remove verificata (0/0 in entrambi gli store), export HAR, backup, shutdown pulito |
+| Report | `html` 200, `json` 200, `md` 200, `pdf` **400** con messaggio esplicativo (`weasyprint` assente) |
+| Collaborator | `/api/collaborator/health` → `ok` (modalità `embedded`) |
+| Browser integrato (smoke) | **7/7** |
+
+### Harness allineato
+
+`privileged_sweep.py` controllava ancora `/api/mitm/quic`, `/api/mitm/udp/*`,
+`/api/network/interfaces` e `/api/network/capture/*`: route che in questo branch
+non esistono più (la policy QUIC/UDP è interna al payload di `/api/mitm/start` e
+i contatori sono in `/api/mitm/status`). I 405/404 che ne uscivano sembravano
+regressioni. Le sezioni sono state rimosse, e su una macchina non elevata lo
+script ora riporta un `NOTE` invece di un rosso: il rifiuto di `mitm/start` con
+spiegazione è il comportamento atteso. Anche `endpoint_sweep.py` non tratta più
+404/422 come failure.
+
+### Cosa resta fuori (e perché)
+
+| Funzione | Perché non è stata esercitata |
+|---|---|
+| MITM trasparente ARP/DHCP/NDP, redirect, QUIC drop reale | Richiede Nyx elevato (raw socket + WinDivert) e un target sulla LAN: qui il backend gira senza privilegi, quindi si è verificato il rifiuto corretto (400) e la modalità Stealth |
+| Router/AP Wi-Fi (`wifi_ap.py`) | Serve una scheda in modalità hosted network e privilegi admin; fuori dal perimetro concordato |
+| Intercettazione TLS end-to-end | Serve la CA installata **sul target**; su questo PC la CA è stata rimossa e la rimozione verificata |
+| Rendering visivo della UI | Nessuno screenshot: la UI è verificata via HTTP, DOM, WebSocket e log console |
+| Scansioni contro terze parti | Il target è `.live_test/target.py` in locale, per non mandare payload a host esterni |
+| Export PDF | `weasyprint` non installato: 400 con messaggio, comportamento voluto |
+
 ## Limiti della verifica
 
 - Il rendering visivo delle pagine non è stato ispezionato (nessuno screenshot);
@@ -119,6 +161,9 @@ solo? Docker serve? E cosa succede se una porta è già occupata?
   applicazioni reali di terze parti.
 - Restano aperti i punti elencati in `NYX_REVIEW_v1.0.0.md` §0.2 (SEC-03b,
   split `mitm.py`, UI RoE/verifier/attack-path).
+- Le funzioni che richiedono privilegi o hardware (MITM trasparente, router/AP
+  Wi-Fi, TLS interception con CA sul target) sono coperte solo per il ramo
+  "rifiuto con spiegazione": vedi la tabella della quarta passata.
 
 ## Riproduzione
 
@@ -132,7 +177,7 @@ python .live_test/build_matrix.py
 python .live_test/endpoint_sweep.py
 python .live_test/write_sweep.py
 python .live_test/e2e_flows.py
-python .live_test/privileged_sweep.py   # richiede Nyx avviato come amministratore
+python .live_test/privileged_sweep.py   # senza admin salta i controlli che richiedono raw socket
 npx electron .live_test/browser_smoke.js
 
 # suite automatiche
