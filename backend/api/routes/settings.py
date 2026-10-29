@@ -35,7 +35,12 @@ class SettingsResponse(BaseModel):
 
 
 @router.get("/proxy", response_model=ProxySettings)
-async def get_proxy_settings():
+async def get_proxy_settings(request: Request):
+    # The engine moves off a busy port on its own: report what is actually
+    # listening, not the value from the config/env.
+    engine = getattr(request.app.state, "proxy_engine", None)
+    if engine is not None:
+        return ProxySettings(host=engine.host, port=engine.port, mode=engine.mode)
     return ProxySettings(host=_proxy_host, port=_proxy_port, mode=_proxy_mode)
 
 
@@ -74,8 +79,10 @@ async def update_proxy_settings(settings_data: ProxySettings, request: Request):
         detail += ". Previous settings restored." if restored else ". Proxy is stopped — restart the backend."
         raise HTTPException(status_code=500, detail=detail)
 
+    # The engine may have picked a neighbouring port because the requested one
+    # is taken; keep the reported settings truthful.
     _proxy_host, _proxy_port, _proxy_mode = (
-        settings_data.host, settings_data.port, settings_data.mode,
+        engine.host, engine.port, getattr(engine, "mode", settings_data.mode),
     )
     return ProxySettings(host=_proxy_host, port=_proxy_port, mode=_proxy_mode)
 

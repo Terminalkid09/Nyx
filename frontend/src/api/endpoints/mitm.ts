@@ -28,6 +28,9 @@ export interface MitmStatus {
   local_ip?: string | null
   proxy_host?: string | null
   proxy_port?: number | null
+  // Portal moves off 18081 when that port is taken.
+  ca_portal_port?: number
+  ca_portal_url?: string | null
   tls_mitm?: boolean
   quic_blocked_packets?: number
   activity?: Array<{ ip: string; host: string; count: number; last_seen: string }>

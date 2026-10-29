@@ -9,6 +9,7 @@ the scanned page reports it is being closed).
 """
 import logging
 import os
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +20,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_PORT = int(os.environ.get("NYX_CA_PORTAL_PORT", "18081"))
 IDLE_TIMEOUT_S = int(os.environ.get("NYX_CA_PORTAL_IDLE_S", "90"))
 HEARTBEAT_EVERY_S = int(os.environ.get("NYX_CA_PORTAL_HEARTBEAT_S", "25"))
+
+# Port the portal actually bound. It moves when the preferred one is taken, so
+# every URL built outside this module (QR codes, status payloads, the UI) must
+# read the live value instead of the constant, otherwise the QR points at a
+# port Nyx never opened.
+_active_port = DEFAULT_PORT
+
+
+def active_port() -> int:
+    """Port the CA portal is (or was last) listening on."""
+    return _active_port
 
 INSTALL_PAGE = """<!DOCTYPE html>
 <html lang="en">
@@ -177,6 +189,23 @@ class _PortalHandler(BaseHTTPRequestHandler):
             self._not_found()
 
 
+class _PortalHTTPServer(ThreadingHTTPServer):
+    """HTTP server that never silently takes over another process's port.
+
+    Windows lets a bind succeed on a port another process already holds with
+    SO_REUSEADDR (the portal used to report "listening on 18081" while the
+    other socket was still there, so half the clients hit the wrong server).
+    Binding exclusively turns that into an error the port walk can handle.
+    """
+
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class CAPortalManager:
     """Spawns an on-demand CA HTTPServer on a fixed LAN-reachable port."""
 
@@ -198,17 +227,35 @@ class CAPortalManager:
 
     def start(self) -> int | None:
         """Start the portal server. Returns the bound port, or None on failure."""
+        global _active_port
         if self._httpd is not None:
             with self._lock:
                 self._last_active = time.time()
             return self.port
-        try:
-            httpd = ThreadingHTTPServer(("0.0.0.0", self.port), _PortalHandler)
-            httpd.allow_reuse_address = True
+        # A busy 18081 (previous Nyx, an unrelated service) must not keep the
+        # target from installing the CA: walk a few ports up before giving up.
+        # The UI reads the bound port from ``lan_port``.
+        httpd = None
+        last_error: OSError | None = None
+        for candidate in range(self.port, min(65535, self.port + 20) + 1):
+            try:
+                httpd = _PortalHTTPServer(("0.0.0.0", candidate), _PortalHandler)
+            except OSError as e:
+                last_error = e
+                continue
+            if candidate != self.port:
+                logger.warning(
+                    "CA portal port %s is busy; using %s instead", self.port, candidate
+                )
+                self.port = candidate
+            _active_port = self.port
             httpd.ca_portal = self
             _PortalHandler.portal = self
-        except OSError as e:
-            logger.error("CA portal bind failed on 0.0.0.0:%s: %s", self.port, e)
+            break
+        if httpd is None:
+            logger.error(
+                "CA portal bind failed on 0.0.0.0:%s: %s", self.port, last_error
+            )
             return None
         self._httpd = httpd
         t = threading.Thread(target=httpd.serve_forever, name="ca-portal", daemon=True)

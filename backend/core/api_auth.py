@@ -207,9 +207,11 @@ async def verify_api_key(request: Request, call_next):
 # Origins allowed to open a WebSocket to the local API: the UI served by this
 # backend itself, plus the Vite dev server used during frontend development.
 _WS_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1")
-# 80 is the Docker compose frontend: nginx proxies /ws to the backend. The
-# Origin must still resolve to a loopback hostname, so this does not let a
-# remote site open the socket.
+# 80 is the Docker compose frontend: nginx proxies /ws to the backend. 5173 is
+# the Vite dev server. The port the socket was actually opened on is always
+# allowed too, because the desktop shell may bind the API to a fallback port
+# when 8000 is taken. The Origin must still resolve to a loopback hostname, so
+# this does not let a remote site open the socket.
 _WS_ALLOWED_PORTS = (80, 8000, 5173)
 
 
@@ -236,4 +238,13 @@ def validate_ws_origin(ws: WebSocket) -> bool:
     if parsed.hostname not in _WS_ALLOWED_HOSTS:
         return False
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return port in _WS_ALLOWED_PORTS
+    if port in _WS_ALLOWED_PORTS:
+        return True
+
+    # Same-origin check for non-default API ports: the page was served by this
+    # very listener, so its origin port is the port the upgrade arrived on.
+    try:
+        target_port = ws.url.port or (443 if ws.url.scheme == "wss" else 80)
+    except Exception:  # noqa: BLE001 — scope may be incomplete in tests
+        return False
+    return port == target_port

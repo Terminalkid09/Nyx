@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import platform
 import socket
 import subprocess
@@ -11,6 +12,7 @@ from mitmproxy.tools.dump import DumpMaster
 from mitmproxy.options import Options
 from core.events.bus import EventBus
 from core.config import settings
+from core.netports import pick_free_port
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +385,11 @@ def _port_in_use(port: int) -> bool:
     """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Windows lets a plain bind steal a port another process holds with
+        # SO_REUSEADDR on a different address (127.0.0.1 vs 0.0.0.0), so the
+        # probe must ask for exclusive use to see the real conflict.
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         s.bind(("0.0.0.0", port))
         s.close()
         return False
@@ -865,6 +872,42 @@ class ProxyEngine:
     def register_addon(self, addon):
         self._addons.append(addon)
 
+    def _preflight_ports(self) -> str | None:
+        """Decide where to listen before mitmproxy binds.
+
+        Our listener port can be taken by an unrelated process (a dev server,
+        another tool) or by a dying Nyx instance. Moving one port up is always
+        better than refusing to start the whole app, so the engine falls back
+        automatically and keeps ``settings.PROXY_PORT`` in sync — the firewall
+        rules, the PAC file and the UI all read it.
+
+        Returns an error message when no usable configuration exists.
+        """
+        if _port_in_use(self.port):
+            replacement = pick_free_port(self.port + 1, host=self.host or "127.0.0.1")
+            if replacement == self.port:
+                return (
+                    f"Port {self.port} is already in use and no neighbouring "
+                    "port is free. Close the process holding it and restart."
+                )
+            logger.warning(
+                "Proxy port %d is busy; this session listens on %d instead",
+                self.port,
+                replacement,
+            )
+            self.port = replacement
+            settings.PROXY_PORT = replacement
+
+        # The transparent redirect port is a separate listener (WinDivert
+        # re-injects there): it cannot move without re-pointing the OS rules.
+        if self.mode in ("transparent", "both") and _port_in_use(TRANSPARENT_PORT):
+            return (
+                f"Port {TRANSPARENT_PORT} is already in use — another Nyx "
+                "instance is probably running. Close all other Nyx "
+                "windows and restart."
+            )
+        return None
+
     def start(self, fastapi_loop: asyncio.AbstractEventLoop) -> tuple[bool, str]:
         self.fastapi_loop = fastapi_loop
         self._stopped.clear()
@@ -967,6 +1010,17 @@ class ProxyEngine:
             self._start_error = str(e)
 
     async def _start_mitmproxy(self):
+        # Must run BEFORE the options are built: the fallback port is written
+        # into both self.port and settings.PROXY_PORT, and the listener (plus
+        # the firewall rule and the UI) reads those. Doing it later left the
+        # already-built Options pointing at the busy port.
+        preflight_error = self._preflight_ports()
+        if preflight_error:
+            logger.critical(preflight_error)
+            self._start_error = preflight_error
+            self.transport_ready = False
+            self._startup_done.set()
+            return
         mitm_mode = ["regular"]
         if self.mode == "transparent" or self.mode == "both":
             if platform.system().lower() == "windows":
@@ -1001,22 +1055,6 @@ class ProxyEngine:
                 "Traffic from target devices will not reach the proxy unless "
                 "they use a manual proxy (Stealth Mode)."
             )
-        # Pre-flight: refuse to start when our listener port is already taken
-        # (second Nyx instance / leftover backend). mitmproxy would fail the
-        # bind inside run() and keep running with a dead listener — the engine
-        # would report "ready" and MITM would blackhole targets.
-        for check_port in sorted({self.port, TRANSPARENT_PORT if self.mode in ("transparent", "both") else self.port}):
-            if _port_in_use(check_port):
-                msg = (
-                    f"Port {check_port} is already in use — another Nyx "
-                    "instance is probably running. Close all other Nyx "
-                    "windows and restart."
-                )
-                logger.critical(msg)
-                self._start_error = msg
-                self.transport_ready = False
-                self._startup_done.set()
-                return
         try:
             self._master = DumpMaster(options)
         except OSError as e:

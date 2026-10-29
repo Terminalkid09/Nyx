@@ -17,6 +17,7 @@ const btnRetry    = document.getElementById('btn-retry');
 const captureBadge = document.getElementById('capture-badge');
 const proxyIndicator = document.getElementById('proxy-indicator');
 const proxyDot = document.getElementById('proxy-dot');
+const proxyPortText = document.getElementById('proxy-port-text');
 
 // ─── Error codes ───────────────────────────────────────────────────────────
 const ERROR_MAP = {
@@ -47,10 +48,13 @@ function applyProxyState(state) {
   if (!state) return;
   const capture = state.capture === true;
   const tls = state.tlsMitm !== false;
+  // The proxy port is not fixed: the shell moves it when 8080 is busy.
+  const proxyAddr = `127.0.0.1:${state.proxyPort || 8080}`;
+  if (proxyPortText) proxyPortText.textContent = proxyAddr;
   if (capture) {
     captureBadge.textContent = tls ? '⬤ PROXIED + TLS' : '⬤ PROXIED (HTTP only)';
     captureBadge.title = tls
-      ? 'HTTP and HTTPS traffic go through Nyx on 127.0.0.1:8080 and is decrypted'
+      ? `HTTP and HTTPS traffic go through Nyx on ${proxyAddr} and is decrypted`
       : 'Only HTTP is proxied: the Nyx CA is not trusted, so HTTPS goes direct';
     captureBadge.style.color = '#a855f7';
     captureBadge.style.opacity = '1';

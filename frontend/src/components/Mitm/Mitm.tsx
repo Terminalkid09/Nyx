@@ -1169,7 +1169,7 @@ export function MitmPage() {
           <DeployBox
             host={status?.proxy_host || status?.local_ip || ''}
             proxyPort={status?.proxy_port ?? 8080}
-            caPort={18081}
+            caPort={status?.ca_portal_port ?? 18081}
           />
         </div>
 

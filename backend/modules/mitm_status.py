@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from core.proxy.engine import quic_dropped_count, windivert_forwarded_count, windivert_last_forwarded
 from core.storage.traffic import MITM_SESSION_ID
-from modules.ca_portal import DEFAULT_PORT as CA_PORTAL_PORT
+from modules.ca_portal import active_port
 
 
 def activity_for_targets(engine, spoofer, ndp_spoofer, dhcp_spoofer) -> list[dict]:
@@ -159,10 +159,13 @@ async def build_status(
         # CA install page served on the LAN (always reachable — targets
         # install/remove the CA out-of-band via QR or this URL).
         "ca_portal_url": (
-            f"http://{local_ip}:{CA_PORTAL_PORT}/"
+            f"http://{local_ip}:{active_port()}/"
             if local_ip and local_ip != "127.0.0.1"
             else None
         ),
+        # The portal walks up from 18081 when that port is taken, so the UI
+        # must read the bound port instead of the default.
+        "ca_portal_port": active_port(),
         # QUIC/HTTP3 blocking: how many of the targets' UDP/443 packets were
         # dropped to force fallback to interceptable TCP/TLS.
         "quic_blocked_packets": quic_dropped_count(),

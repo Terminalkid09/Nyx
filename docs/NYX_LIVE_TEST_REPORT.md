@@ -81,6 +81,32 @@ La CA dell'operatore è stata rimossa e la rimozione verificata (0/0 in
 PC: doppio clic su `%USERPROFILE%\.mitmproxy\mitmproxy-ca-cert.cer` →
 Installa → Autorità di certificazione radice attendibili.
 
+## Terza passata: elevazione, porte occupate, Docker (27 ottobre 2026)
+
+Questa passata risponde a tre domande pratiche: Nyx chiede i permessi admin da
+solo? Docker serve? E cosa succede se una porta è già occupata?
+
+| Verifica | Esito |
+|---|---|
+| Manifest dell'eseguibile Windows | `requestedExecutionLevel level="requireAdministrator"` presente in `dist/win-unpacked/Nyx.exe`: al click Windows mostra l'UAC, senza "Esegui come amministratore" manuale. Il backend (`nyx-backend.exe`, `asInvoker`) eredita l'elevazione dal processo padre |
+| Docker obbligatorio? | **No.** Il desktop avvia `nyx-backend.exe` come processo figlio (niente container); `docker-compose.yml` è solo un deployment web opzionale |
+| API occupata (8000) | Desktop dev: `[nyx] API port 8000 busy -> 8001`; UI caricata, `/health` 200, WebSocket `/ws/traffic` accettato |
+| Proxy occupato (8080) | `[nyx] proxy port 8080 busy -> 8082`; `GET /api/settings/proxy` → `8082`, listener attivo |
+| Fallback esplicito | Con 8901/8903 occupate: API su **8902**, proxy su **8904**, `ca_portal_port` su **18082** (era 18081) |
+| Traffico sul proxy di fallback | `curl -x 127.0.0.1:8904 http://<LAN>:8910/` → 200, richiesta persistita con status 200 |
+| Suite automatiche | backend **1121 passed, 1 skipped**; frontend type-check 0 errori, **19** test, lint **0 errori**, build ok |
+| Sweep live | `endpoint_sweep` + `write_sweep` senza 5xx (l'unico 502 è il verifier senza target raggiungibile) |
+| Flussi end-to-end | **17/17** (proxy → finding passivi → scan attivo → repeater → crawler → content discovery → fuzzer → decoder → comparer) |
+
+### Bug trovati e corretti in questa passata
+
+| Componente | Sintomo | Fix |
+|---|---|---|
+| `core/proxy/engine.py` | Il preflight delle porte girava **dopo** aver costruito `Options`: il fallback aggiornava `self.port` ma mitmproxy restava sulla porta occupata (bind riuscito per `SO_REUSEADDR`, half-listener) | Preflight spostato all'inizio di `_start_mitmproxy()` |
+| `core/netports.py`, `engine._port_in_use` | Su Windows un bind normale "vince" su una porta tenuta con `SO_REUSEADDR` da un indirizzo diverso (127.0.0.1 vs 0.0.0.0): la porta risultava libera | Sonda con `SO_EXCLUSIVEADDRUSE`; anche il client Electron prova `0.0.0.0` **e** `127.0.0.1` |
+| `modules/ca_portal.py` | La porta del portale CA poteva essere occupata da un altro listener (bind non esclusivo) e QR/status continuavano a puntare a 18081 | Server con bind esclusivo, port walk 18081→18082, `active_port()` usato da QR, `/api/mitm/status` e DeployBox |
+| `modules/mitm_status.py`, `api/routes/system.py` | I due costruttori di URL usavano `DEFAULT_PORT` invece della porta reale | Usano `active_port()` / `portal.lan_port` |
+
 ## Limiti della verifica
 
 - Il rendering visivo delle pagine non è stato ispezionato (nessuno screenshot);

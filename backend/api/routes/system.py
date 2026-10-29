@@ -37,8 +37,11 @@ def _get_frontend_dist() -> Path:
     return Path(__file__).parent.parent.parent / "frontend" / "dist"
 
 
-def _get_ca_base_url() -> str:
-    from modules.ca_portal import DEFAULT_PORT
+def _get_ca_base_url(mgr=None) -> str:
+    from modules.ca_portal import active_port
+    # The portal walks up from 18081 when that port is busy; the QR must encode
+    # the port it actually bound, not the default.
+    port = getattr(mgr, "lan_port", None) or active_port()
     host = settings.API_HOST
     if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0", ""):
         from modules.arp_spoof import _get_local_ip
@@ -46,7 +49,7 @@ def _get_ca_base_url() -> str:
             host = _get_local_ip()
         except Exception:
             host = "127.0.0.1"
-    return f"http://{host}:{DEFAULT_PORT}"
+    return f"http://{host}:{port}"
 
 
 def _get_ca_portal(app_state):
@@ -287,9 +290,10 @@ async def get_api_key(request: Request):
 
 @router.get("/api/ca-qr")
 async def ca_qr(request: Request):
-    if _get_ca_portal(request.app.state) is None:
+    portal = _get_ca_portal(request.app.state)
+    if portal is None:
         return {"error": "CA certificate not found"}
-    img = qrcode.make(f"{_get_ca_base_url()}/")
+    img = qrcode.make(f"{_get_ca_base_url(portal)}/")
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -311,9 +315,10 @@ async def ca_uninstall_page():
 
 @router.get("/api/ca-uninstall-qr")
 async def ca_uninstall_qr(request: Request):
-    if _get_ca_portal(request.app.state) is None:
+    portal = _get_ca_portal(request.app.state)
+    if portal is None:
         return {"error": "CA certificate not found"}
-    img = qrcode.make(f"{_get_ca_base_url()}/api/ca-uninstall")
+    img = qrcode.make(f"{_get_ca_base_url(portal)}/api/ca-uninstall")
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

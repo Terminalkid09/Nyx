@@ -3,8 +3,49 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const os = require('os');
+
+// Ports are chosen before the backend starts, because a busy 8000/8080 is the
+// normal case on a developer machine (dev servers, another tool) and the app
+// must not refuse to open. The values are passed to the backend through the
+// environment and used for every URL the shell builds.
+let apiPort = 8000;
+let proxyPort = 8080;
+
+function canListen(port, host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen(port, host, () => server.close(() => resolve(true)));
+  });
+}
+
+// Windows lets a bind succeed on a port another process holds on a *different*
+// address (0.0.0.0 vs 127.0.0.1) with SO_REUSEADDR, so probing one address is
+// not enough: the backend binds the wildcard and would land on another port
+// than the one every URL in the shell uses. Both must be free.
+async function isPortFree(port) {
+  return (await canListen(port, '0.0.0.0')) && (await canListen(port, '127.0.0.1'));
+}
+
+async function findFreePort(start, attempts = 50) {
+  for (let port = start; port <= start + attempts && port <= 65535; port += 1) {
+    if (await isPortFree(port)) return port;
+  }
+  return start;
+}
+
+async function choosePorts() {
+  const wantedApi = parseInt(process.env.NYX_API_PORT || '8000', 10);
+  const wantedProxy = parseInt(process.env.NYX_PROXY_PORT || '8080', 10);
+  apiPort = await findFreePort(Number.isFinite(wantedApi) ? wantedApi : 8000);
+  proxyPort = await findFreePort(Number.isFinite(wantedProxy) ? wantedProxy : 8080);
+  if (apiPort !== wantedApi) console.log(`[nyx] API port ${wantedApi} busy -> ${apiPort}`);
+  if (proxyPort !== wantedProxy) console.log(`[nyx] proxy port ${wantedProxy} busy -> ${proxyPort}`);
+}
 
 const PID_FILE = path.join(os.tmpdir(), 'nyx-backend.pid');
 const COLLAB_PID_FILE = path.join(os.tmpdir(), 'nyx-collaborator.pid');
@@ -71,7 +112,7 @@ function getBackendArgs() {
   if (app.isPackaged) {
     return [];
   }
-  return ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'];
+  return ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(apiPort)];
 }
 
 function killProcessTree(pid) {
@@ -133,6 +174,8 @@ function startBackend() {
     DATABASE_URL: process.env.DATABASE_URL || `sqlite+aiosqlite:///${path.join(nyxHome, 'nyx.db').replace(/\\/g, '/')}`,
     SECRET_KEY: process.env.SECRET_KEY || require('crypto').randomBytes(32).toString('hex'),
     NYX_HOME: nyxHome,
+    API_PORT: String(apiPort),
+    PROXY_PORT: String(proxyPort),
   };
   if (app.isPackaged && fs.existsSync(frontendDist)) {
     env.NYX_FRONTEND_DIST = frontendDist;
@@ -201,7 +244,7 @@ function stopBackend() {
   //    taskkill /F would skip FastAPI's teardown and leave the OS dirty.
   try {
     require('child_process').execSync(
-      'curl -s -m 2 -X POST http://127.0.0.1:8000/api/shutdown',
+      `curl -s -m 2 -X POST http://127.0.0.1:${apiPort}/api/shutdown`,
       { stdio: 'ignore', timeout: 2500 }
     );
   } catch {}
@@ -244,7 +287,7 @@ function startCollaborator() {
     COLLAB_HTTP_PORT: '9999',
     COLLAB_DNS_PORT: '53',
     COLLAB_API_PORT: '9090',
-    COLLAB_WEBHOOK_URL: 'http://localhost:8000/api/collaborator/interactions',
+    COLLAB_WEBHOOK_URL: `http://localhost:${apiPort}/api/collaborator/interactions`,
   };
 
   collaboratorProcess = spawn(execPath, [], {
@@ -277,7 +320,7 @@ function pollHealth(retries = 90) {
   return new Promise((resolve, reject) => {
     const attempt = (n) => {
       if (n <= 0) return reject(new Error('Backend did not start in time'));
-      const req = http.get('http://127.0.0.1:8000/health', (res) => {
+      const req = http.get(`http://127.0.0.1:${apiPort}/health`, (res) => {
         if (res.statusCode === 200) return resolve();
         setTimeout(() => attempt(n - 1), 1000);
       });
@@ -379,7 +422,7 @@ function createMainWindow() {
 
   trackWindowState(mainWindow);
 
-  mainWindow.loadURL('http://127.0.0.1:8000');
+  mainWindow.loadURL(`http://127.0.0.1:${apiPort}`);
 
   mainWindow.once('ready-to-show', () => {
     if (loadingWindow) { loadingWindow.close(); loadingWindow = null; }
@@ -460,7 +503,7 @@ async function launchBrowser() {
   let tlsMitm = true; // TLS MITM forced (CA trusted) — decrypt HTTPS
   try {
     const resp = await new Promise((resolve, reject) => {
-      const req = http.get('http://127.0.0.1:8000/api/proxy/capture', { timeout: 3000 }, (res) => {
+      const req = http.get(`http://127.0.0.1:${apiPort}/api/proxy/capture`, { timeout: 3000 }, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
@@ -477,7 +520,7 @@ async function launchBrowser() {
   }
   // Read by the renderer so the toolbar reports the real state instead of a
   // hard-coded "PROXIED" badge.
-  browserProxyState = { capture: useProxy, tlsMitm };
+  browserProxyState = { capture: useProxy, tlsMitm, proxyPort };
 
   if (useProxy) {
     try {
@@ -486,8 +529,8 @@ async function launchBrowser() {
       // must NOT force TLS MITM: route only http through the proxy and let
       // https go direct — otherwise every HTTPS page throws a cert alert.
       const rules = tlsMitm
-        ? 'http=127.0.0.1:8080;https=127.0.0.1:8080'
-        : 'http=127.0.0.1:8080';
+        ? `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`
+        : `http=127.0.0.1:${proxyPort}`;
       await ses.setProxy({
         proxyRules: rules,
         proxyBypassRules: '<local>',
@@ -555,7 +598,7 @@ async function launchBrowser() {
 
 function toggleProxyCapture(active) {
   const postData = JSON.stringify({ active });
-  const req = http.request('http://127.0.0.1:8000/api/proxy/capture', {
+  const req = http.request(`http://127.0.0.1:${apiPort}/api/proxy/capture`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
     timeout: 3000,
@@ -565,7 +608,7 @@ function toggleProxyCapture(active) {
 }
 
 function downloadCA() {
-  http.get('http://127.0.0.1:8000/api/ca-certificate', (res) => {
+  http.get(`http://127.0.0.1:${apiPort}/api/ca-certificate`, (res) => {
     if (res.statusCode !== 200) return;
     const filePath = path.join(app.getPath('downloads'), 'mitmproxy-ca-cert.pem');
     const file = fs.createWriteStream(filePath);
@@ -575,6 +618,7 @@ function downloadCA() {
 
 app.whenReady().then(async () => {
   killOrphanBackends();
+  await choosePorts();
   showLoading();
   startBackend();
   startCollaborator();

@@ -551,4 +551,19 @@ if FRONTEND_DIST.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=settings.API_HOST, port=settings.API_PORT)
+
+    # The shell normally picks a free port and passes API_PORT. When the binary
+    # is started directly, a busy 8000 used to abort with a bare "address
+    # already in use"; move to the next free port instead and say where we
+    # ended up.
+    from core.netports import pick_free_port
+
+    _api_port = pick_free_port(settings.API_PORT, host=settings.API_HOST or "127.0.0.1")
+    if _api_port != settings.API_PORT:
+        logger.warning(
+            "API port %d is busy; listening on %d instead",
+            settings.API_PORT,
+            _api_port,
+        )
+        settings.API_PORT = _api_port
+    uvicorn.run(app, host=settings.API_HOST, port=_api_port)

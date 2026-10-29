@@ -34,7 +34,7 @@ from modules.mitm_admin import (
     remove_windows_firewall as _remove_windows_firewall,
 )
 from modules.vendor_lookup import lookup_vendor_async
-from modules.ca_portal import DEFAULT_PORT as CA_PORTAL_PORT
+from modules.ca_portal import active_port as ca_portal_active_port
 from core.storage.traffic import MITM_SESSION_ID
 
 logger = logging.getLogger(__name__)
@@ -742,7 +742,7 @@ async def _mitm_start_locked(req: MITMStartRequest):
     # reachable from the target device. The portal itself is started at
     # backend startup (always reachable): targets install/remove the CA
     # out-of-band (scan the QR / open the URL from the target device).
-    ca_portal_url = f"http://{local_ip}:{CA_PORTAL_PORT}/" if local_ip and local_ip != "127.0.0.1" else ""
+    ca_portal_url = f"http://{local_ip}:{ca_portal_active_port()}/" if local_ip and local_ip != "127.0.0.1" else ""
 
     # Prometheus metrics
     from core.metrics import registry as _metrics

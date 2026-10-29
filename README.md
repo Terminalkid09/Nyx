@@ -497,13 +497,22 @@ Download the latest installer for your platform from the [Releases](https://gith
 | **macOS** | `Nyx *.dmg` |
 | **Linux** | `Nyx *.AppImage` or `nyx_*.deb` |
 
-Double-click and launch. No Python, Node.js, or Docker required.
+Double-click and launch. No Python, Node.js, or Docker required — the packaged
+app starts its own backend process; nothing runs in a container.
 
-> **💡 For ARP Spoofing (zero-config interception):** Launch the app as **administrator**.
-> - Windows: right-click → _Run as administrator_
-> - macOS/Linux: `sudo /opt/Nyx/nyx-backend` or `sudo npm start` (dev mode)
+> **💡 Administrator rights:** the Windows build carries a
+> `requireAdministrator` manifest, so **Windows shows the UAC prompt as soon as
+> you launch it** (accept it — Nyx needs raw sockets for ARP/DNS spoofing,
+> WinDivert for the transparent proxy, and the firewall rules it manages).
+> macOS/Linux have no equivalent prompt: start the app with `sudo` when you
+> need spoofing, or run it as a normal user for forward-proxy mode.
 
-### Docker
+> **🔌 Ports are automatic:** Nyx prefers API `8000`, proxy `8080` and CA portal
+> `18081`, but never fails when one is taken — it walks to the next free port
+> and every URL the UI shows (proxy address, QR code, settings) uses the port it
+> actually bound. Nothing to configure by hand.
+
+### Docker (optional — for the web UI only)
 
 ```bash
 git clone https://github.com/Terminalkid09/nyx.git
@@ -657,8 +666,8 @@ Nyx is available as a native desktop application via Electron, providing:
 | Feature | Desktop (Electron) | Web (Docker / `uvicorn`) |
 |---------|-------------------|--------------------------|
 | **Transparent Proxy** | ✅ Always | ✅ Always |
-| **ARP Spoofing** | ✅ **When launched as admin** | ❌ Blocked (no privileges) |
-| **DNS Spoofing** | ✅ **When launched as admin** | ❌ Blocked (no privileges) |
+| **ARP Spoofing** | ✅ Elevated at launch (UAC) | ❌ Blocked (no privileges) |
+| **DNS Spoofing** | ✅ Elevated at launch (UAC) | ❌ Blocked (no privileges) |
 | **Forward proxy (regular)** | ✅ Always | ✅ Always |
 | **All tools** (Scanner, Fuzzer, etc.) | ✅ Always | ✅ Always |
 | **Download CA** | ✅ One-click | ✅ `GET /api/ca-certificate` |
@@ -666,7 +675,9 @@ Nyx is available as a native desktop application via Electron, providing:
 > **⚠️ ARP Spoofing requires admin privileges** because it sends raw network packets (via `scapy`). On Windows/Mac/Linux, only admin can create raw sockets.
 >
 > **How to launch with admin:**
-> - **Windows:** Right-click `Nyx.exe` / `Nyx Setup *.exe` → **Run as administrator**
+> - **Windows:** nothing to do — the app manifest requests elevation, so clicking
+>   `Nyx.exe` (or the Start-menu/desktop shortcut) raises the UAC prompt. The
+>   backend it spawns inherits that elevation.
 > - **macOS/Linux:** `sudo /opt/Nyx/nyx-backend` or `sudo npm start` (dev mode)
 >
 > **Transparent proxy is supported on all platforms:**
@@ -848,7 +859,9 @@ Output format: `{"ts": "...", "level": "INFO", "logger": "...", "msg": "..."}`
 Nyx supports two proxy modes:
 
 #### Regular Mode (forward proxy — like Burp)
-Configure your browser/device proxy to `PC_IP:8080`. Works everywhere, no admin needed.
+Configure your browser/device proxy to `PC_IP:8080` (or whichever port Nyx
+reports in Settings/Proxy Log — it moves off 8080 when that port is busy).
+Works everywhere, no admin needed.
 
 | Device | Proxy Host | Proxy Port |
 |--------|-----------|------------|
