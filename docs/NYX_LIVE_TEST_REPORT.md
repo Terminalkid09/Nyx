@@ -1,4 +1,47 @@
-# Nyx — Report di verifica live (24 ottobre 2026)
+# Nyx — Report di verifica live (v2.0.0, 30 ottobre 2026)
+
+## Passata v2.0.0 (chiusura dei P0 della review esterna)
+
+Backend standalone su `127.0.0.1:8012` (DB isolato in `.live_test/live_run`),
+proxy sul 8082, target locale su `127.0.0.1:8099` e target TLS self-signed su
+`192.168.1.155:9443`. Nessun host esterno contattato.
+
+| Verifica | Esito |
+|---|---|
+| `.live_test/security_regression.py` (dev mode) | **15/15** — ogni bypass riprodotto dalla review ora è rifiutato |
+| `.live_test/security_regression.py` (token mode) | **19/19** — WebSocket e `/api/auth/key` inclusi |
+| Endpoint GET | 77 × 200, 21 × 404, 4 × 422, **0 × 5xx** |
+| Endpoint write | 36 × 200, 14 × 201, 19 × 400, 37 × 404, 6 × 422, **0 × 5xx** |
+| Flussi end-to-end | **17/17** |
+| Backend `pytest` | **1153 passed, 1 skipped** |
+| Frontend `tsc` / `vitest` / `eslint` | **0 errori / 22 passed / 0 errori (432 warning)** |
+| MITM TLS | `curl -x proxy --cacert nyx-ca https://…:9443` → 200, body decifrato, richiesta persistita con URL `https://` |
+| Rate limiter | 400 GET consecutive su loopback → 400 × 200, **0 × 429** |
+
+### Cosa ha verificato la regressione live
+
+| Bypass riprodotto nella review | Esito ora |
+|---|---|
+| Scan attivo senza `session_id` su target fuori scope | **422** (campo obbligatorio) |
+| Scan attivo con sessione fuori scope | **403 out_of_scope** |
+| Scan attivo con sessione in scope | **200**, SQLi rilevata e persistita |
+| `/api/auto-exploit/verify`, `/api/repeater/send`, `/api/crawler/start`, `/api/content-discovery/start`, `/api/ab-test/run` senza `session_id` | **422** ciascuno |
+| `/api/scope/check` con sessione A su target coperto dalla sessione B | `in_scope: false` |
+| Import Burp con `DOCTYPE` nascosto oltre 4 KB di commento | **400** |
+| `/ws/traffic` senza token (token mode) | handshake chiuso, **403** |
+| `/ws/traffic` con token | **101 Switching Protocols** |
+| `/api/auth/key` senza token | **403**; con token **200** |
+
+### Limiti di questa passata
+
+- Router/AP: non testati (richiedono privilegi elevati e un adattatore dedicato);
+  resta la verifica statica già fatta in precedenza.
+- Il target TLS è self-signed su LAN locale: prova la decrittazione Nyx, non
+  un sito reale con catene di certificati pubbliche.
+- La porta 8443 dell'host era occupata da un altro servizio locale: il test
+  TLS usa 9443 per non interferire.
+
+## Passata precedente (24 ottobre 2026)
 
 Verifica eseguita **senza Docker**, sul backend reale avviato da Electron e su
 un backend standalone con database isolato. Nessun exploit inviato a host

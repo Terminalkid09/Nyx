@@ -394,7 +394,7 @@ function showLoading() {
     <div style="width:160px;height:2px;background:#1f2937;border-radius:2px;overflow:hidden">
       <div style="width:30%;height:100%;background:#f59e0b;border-radius:2px;animation:load 1.5s ease-in-out infinite"></div>
     </div>
-    <div style="font-size:11px;color:#6b7280;margin-top:8px" id="substatus">v1.0.0</div>
+    <div style="font-size:11px;color:#6b7280;margin-top:8px" id="substatus">v${app.getVersion()}</div>
     <style>@keyframes load { 50% { width:80%; } }</style></body></html>`
   )}`);
   loadingWindow.on('closed', () => { loadingWindow = null; });

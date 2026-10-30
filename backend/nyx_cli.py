@@ -220,7 +220,11 @@ def _import_openapi(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nyx", description="Nyx headless scanner")
-    parser.add_argument("--version", action="version", version="Nyx CLI 1.1.0")
+    # Imported here, like the other core imports in this file: the module has to
+    # stay importable before backend/ is on sys.path.
+    from core.version import VERSION
+
+    parser.add_argument("--version", action="version", version=f"Nyx CLI {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="run active checks against one URL")

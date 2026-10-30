@@ -76,7 +76,10 @@ def parse_document(text: str, *, max_items: int = MAX_ITEMS) -> BurpDocument:
             f"The document is larger than {MAX_DOCUMENT_BYTES // (1024 * 1024)} MB."
         )
 
-    upper = text[:4096].upper()
+    # Scan the whole document, not just the prolog: a caller can pad the file
+    # with comments or whitespace and push a DOCTYPE past any fixed prefix
+    # window. A Burp export never carries one anywhere, so a hit is a reject.
+    upper = text.upper()
     if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
         raise BurpImportError("The document declares a DOCTYPE/ENTITY, which a Burp export never contains.")
 

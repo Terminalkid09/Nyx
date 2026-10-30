@@ -1,3 +1,4 @@
+import shlex
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Literal
@@ -35,6 +36,82 @@ class FindingUpdate(BaseModel):
     clear_severity_override: bool = False
 
 
+def _request_from_evidence(finding: Finding) -> dict | None:
+    """Recover a replayable request from the stored evidence.
+
+    Every scanner finding carries a ``Reproduce:\ncurl -i -X GET '<url>'`` block
+    (see ``core/storage/evidence.py``). Older findings, and findings whose
+    captured request was removed by the retention janitor, no longer have a
+    Request row, and retest used to answer a generic 400 for them.
+    """
+    evidence = finding.evidence
+    if not isinstance(evidence, str) or "curl " not in evidence:
+        return None
+
+    for line in evidence.splitlines():
+        line = line.strip()
+        if not line.startswith("curl "):
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+
+        method, url = "GET", None
+        headers: dict[str, str] = {}
+        body = None
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            nxt = tokens[index + 1] if index + 1 < len(tokens) else None
+            if token in ("-X", "--request") and nxt:
+                method = nxt.upper()
+                index += 2
+                continue
+            if token in ("-H", "--header") and nxt:
+                key, _, value = nxt.partition(":")
+                headers[key.strip()] = value.strip()
+                index += 2
+                continue
+            if token in ("--data-raw", "--data", "-d") and nxt:
+                body = nxt
+                index += 2
+                continue
+            if url is None and token.startswith(("http://", "https://")):
+                url = token
+            index += 1
+
+        if not url:
+            continue
+        # Evidence is scrubbed before being stored, so a placeholder is not a
+        # credential the user wants replayed.
+        headers = {k: v for k, v in headers.items() if v != "[REDACTED]"}
+        return {
+            "method": method,
+            "url": url,
+            "headers": headers,
+            "body": body,
+            "response_status": None,
+        }
+    return None
+
+
+async def _resolve_retest_request(db: AsyncSession, finding: Finding) -> dict | None:
+    """Return the request to replay, or None when the finding cannot be re-sent."""
+    req = None
+    if finding.request_id is not None:
+        req = await db.get(Request, finding.request_id)
+    if req is not None and req.url:
+        return {
+            "method": (req.method or "GET").upper(),
+            "url": req.url,
+            "headers": dict(req.request_headers or {}),
+            "body": req.request_body,
+            "response_status": req.response_status,
+        }
+    return _request_from_evidence(finding)
+
+
 async def authorize_finding_target(
     finding_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -42,16 +119,21 @@ async def authorize_finding_target(
     """Retest re-sends a real request, so it must honour scope and RoE.
 
     Without this the operator could probe a target the engagement no longer
-    covers just by pressing retest on an old finding.
+    covers just by pressing retest on an old finding. A finding with nothing
+    replayable is not an authorization problem: the handler answers
+    "not_retestable" instead of the old generic 400.
     """
     finding = await db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(404, detail="Finding not found")
-    req = await db.get(Request, finding.request_id)
-    if not req or not req.url:
-        raise HTTPException(400, detail="Associated request not found")
 
-    allowed, kind, detail = await authorize(finding.session_id, req.url)
+    target = await _resolve_retest_request(db, finding)
+    if target is None:
+        return
+
+    allowed, kind, detail = await authorize(
+        finding.session_id, target["url"], require_session=True
+    )
     if not allowed:
         raise HTTPException(403, detail=f"Target not authorized ({kind}: {detail})")
 
@@ -164,24 +246,33 @@ async def retest_finding(
     if not finding:
         raise HTTPException(404, detail="Finding not found")
 
-    req = await db.get(Request, finding.request_id)
-    if not req:
-        raise HTTPException(400, detail="Associated request not found")
+    target = await _resolve_retest_request(db, finding)
+    if target is None:
+        # Nothing to replay. Say so explicitly: a 400 here read like a broken
+        # link, while the finding is simply not reproducible by a re-send.
+        return {
+            "result": "not_retestable",
+            "evidence": (
+                "No replayable request is stored for this finding. Open the "
+                "endpoint from the Proxy history or Repeater to re-test it."
+            ),
+            "triage_status": finding.triage_status,
+        }
 
     import httpx
     try:
         async with httpx.AsyncClient() as client:
-            method = req.method.lower()
-            headers = dict(req.request_headers or {})
-            body = req.request_body
-            resp = await client.request(method, req.url, headers=headers, content=body, timeout=10, follow_redirects=False)
-            evidence = f"Re-ran {req.method} {req.url} -> {resp.status_code} ({len(resp.content)} bytes)"
+            method = target["method"].lower()
+            headers = target["headers"]
+            body = target["body"]
+            resp = await client.request(method, target["url"], headers=headers, content=body, timeout=10, follow_redirects=False)
+            evidence = f"Re-ran {target['method']} {target['url']} -> {resp.status_code} ({len(resp.content)} bytes)"
 
             # A different status is a signal, not proof: a WAF, a rate limit or
             # a rotated token also change it. Only a response that still looks
             # like the original confirms the finding; anything else goes back
             # to the operator instead of being marked "fixed" on a guess.
-            if req.response_status and resp.status_code == req.response_status:
+            if target["response_status"] and resp.status_code == target["response_status"]:
                 result = "confirmed"
             else:
                 result = "needs_review"

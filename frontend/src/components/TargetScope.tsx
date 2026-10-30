@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../api/client'
+import { useSessionStore } from '../store/useSessionStore'
 
 interface ScopeRule {
   id: string
@@ -24,6 +25,7 @@ interface Suggestion {
 const ALL_PROTOCOLS = ['HTTP', 'HTTPS']
 
 export function TargetScope() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [rules, setRules] = useState<ScopeRule[]>([])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editPattern, setEditPattern] = useState('')
@@ -37,11 +39,16 @@ export function TargetScope() {
   useEffect(() => {
     loadRules()
     apiClient.get('/api/scope/suggestions').then(r => setSuggestions(r.data)).catch(() => {})
-  }, [])
+    // Rules are per engagement: switching session must not keep showing (or
+    // applying) another session's scope.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId])
 
   const loadRules = async () => {
     try {
-      const { data } = await apiClient.get('/api/scope/')
+      const { data } = await apiClient.get('/api/scope/', {
+        params: { session_id: activeSessionId },
+      })
       setRules(data)
     } catch { setError('Failed to load rules') }
   }
@@ -64,6 +71,7 @@ export function TargetScope() {
   const createRule = async (ruleType: 'include' | 'exclude') => {
     try {
       await apiClient.post('/api/scope/', {
+        session_id: activeSessionId,
         name: `New ${ruleType} rule`,
         rule_type: ruleType,
         pattern: '',
@@ -122,7 +130,10 @@ export function TargetScope() {
     if (!testUrl) return
     setError('')
     try {
-      const { data } = await apiClient.post('/api/scope/check', { url: testUrl })
+      const { data } = await apiClient.post('/api/scope/check', {
+        url: testUrl,
+        session_id: activeSessionId,
+      })
       setTestResult(data)
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message)

@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
+from api.deps import ensure_authorized
+from core.authorization import authorize
 from core.storage.database import AsyncSessionLocal
 from core.storage.models import Request as RequestModel
 from sqlalchemy import select
@@ -57,6 +59,8 @@ async def generate_csrf_poc_from_request(request_id: uuid.UUID, request: Request
 
 class ParamDiscoveryRequest(BaseModel):
     target_url: str
+    # Required: discovery probes the target with dozens of requests.
+    session_id: str
 
 
 class ParamChainRequest(BaseModel):
@@ -69,9 +73,13 @@ async def start_param_discovery(body: ParamDiscoveryRequest, request: Request):
     event_bus = getattr(request.app.state, 'event_bus', None)
     if not event_bus:
         raise HTTPException(503, detail="Backend not fully initialized")
+    decision = await authorize(
+        body.session_id, body.target_url, require_session=True
+    )
+    ensure_authorized(*decision)
     from modules.automations.param_chain import ParamDiscoveryService
     service = ParamDiscoveryService(event_bus)
-    result = await service.discover(body.target_url)
+    result = await service.discover(body.target_url, session_id=body.session_id)
     return result
 
 

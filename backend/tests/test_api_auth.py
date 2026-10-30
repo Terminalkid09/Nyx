@@ -33,6 +33,26 @@ async def test_auth_key_endpoint(transport):
 
 
 @pytest.mark.asyncio
+async def test_auth_key_requires_session_token_in_token_mode(transport, require_token):
+    """The key must not be readable by an unauthenticated local process."""
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/auth/key")
+    assert r.status_code == 403
+    assert "X-Nyx-Token" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_auth_key_with_session_token_in_token_mode(transport, require_token):
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get(
+            "/api/auth/key",
+            headers={"X-Nyx-Token": require_token.SESSION_TOKEN},
+        )
+    assert r.status_code == 200
+    assert r.text == require_token.API_KEY
+
+
+@pytest.mark.asyncio
 async def test_ws_path_no_auth(transport):
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/ws/test")

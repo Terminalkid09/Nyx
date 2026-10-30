@@ -730,9 +730,36 @@ The installer will be generated in `desktop/dist/`.
 | `NYX_SQLCIPHER_KEY` | *(empty)* | Opt-in SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`). Empty means the database is stored **in clear** |
 | `API_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra Host header names accepted by the API (loopback plus `test`/`testserver` are always allowed) |
 | `TRUSTED_PROXY_CIDRS` | *(empty)* | Comma-separated reverse-proxy networks allowed to call the API without `X-API-Key` (set by `docker-compose.yml`) |
+| `API_REQUIRE_SESSION_TOKEN` | `false` | Require the per-boot `X-Nyx-Token` on every API call and WebSocket upgrade, even from loopback (on in the packaged desktop build) |
+| `RATE_LIMIT_RPS` | `100` | Sustained API requests per second allowed per remote client IP |
+| `RATE_LIMIT_BURST` | `50` | Instantaneous burst allowance for a remote client (429 beyond it) |
+| `RATE_LIMIT_RPS_LOCAL` | `600` | Same limits for loopback / trusted-proxy callers (the UI, the CLI, endpoint sweeps) |
+| `RATE_LIMIT_BURST_LOCAL` | `300` | Burst allowance for loopback / trusted-proxy callers |
 | `INTERCEPTOR_PAUSE_TTL_SECONDS` | `120` | Auto-resume a paused intercepted flow after this many seconds (0 disables) |
 | `PROXY_NOISE_DOMAINS` | *(empty)* | Comma-separated override of the built-in noise-host list the proxy drops (health checks, OCSP, …) |
 | `LOG_FORMAT` | `text` | Set to `json` for structured JSON logging (useful for ELK/Grafana) |
+
+### API authorization (scope + token)
+
+Two gates apply to anything that generates traffic, both fail-closed:
+
+1. **Engagement scope.** Every endpoint that sends requests on its own —
+   `POST /api/active-scanner/run`, `/api/auto-exploit/verify`,
+   `/api/auto-exploit/execute`, `/api/crawler/start`, `/api/ab-test/run`,
+   `/api/content-discovery/start`, `/api/auth-scan/scan`, `/api/repeater/send` —
+   requires `session_id` in the body. Omitting it is a **400**
+   (`missing_session`/`invalid_session`); a target outside the session's rules or
+   outside the Rules of Engagement is a **403** (`out_of_scope`/`roe`). There is
+   no "no session" mode that skips the scope check.
+2. **Local API token.** With `API_REQUIRE_SESSION_TOKEN=true` (the packaged
+   desktop build), every `/api/` call and the `/ws/traffic` WebSocket must carry
+   the token generated at boot and stored in `NYX_HOME/session.token`: the
+   `X-Nyx-Token` header for HTTP, `?token=` for the socket (browsers cannot set
+   WS headers). Only the CA download/QR/uninstall pages and `/api/mitm/portal*`
+   are exempt, because a target device's browser has to reach them to install or
+   remove the CA. `POST /api/scope/check` takes an optional `session_id` and, when
+   given, answers with that session's rules (plus legacy global rules) instead of
+   every rule in the database.
 
 ### Compliance Reports
 
@@ -760,8 +787,9 @@ GET /api/compliance/status
 **Default: the database is NOT encrypted.** `nyx.db` is a plain SQLite file. It
 contains intercepted traffic, including cookies and credentials in request and
 response **bodies** — header redaction covers header names only, it cannot
-redact secrets inside a JSON body or a form post. Use full-disk encryption
-(BitLocker/FileVault) or opt into SQLCipher:
+redact secrets inside a JSON body or a form post. Full-disk encryption
+(BitLocker/FileVault/LUKS) on the host is therefore a **requirement**, not a
+suggestion; SQLCipher is the per-database alternative:
 
 ```bash
 pip install pysqlcipher3
@@ -820,6 +848,7 @@ Send the same request as two users and compare what comes back:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/ab-test/run -H 'Content-Type: application/json' -d '{
+  "session_id": "<session-uuid>",
   "url": "https://target.example/api/items/42",
   "identity_a": {"name": "alice", "headers": {"Cookie": "session=<alice>"}},
   "identity_b": {"name": "bob",   "headers": {"Cookie": "session=<bob>"}}
@@ -900,7 +929,7 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
 ### Running Tests
 
 ```bash
-# Full backend suite (~1200 tests: modules, API contracts, scanners)
+# Full backend suite (~1150 tests: modules, API contracts, scanners)
 cd backend
 python -m pytest -q
 

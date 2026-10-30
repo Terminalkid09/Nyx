@@ -67,6 +67,17 @@ class Settings(BaseSettings):
     # packaged desktop shell reads that file and hands it to the renderer.
     # Off by default so development and the CLI keep working unchanged.
     API_REQUIRE_SESSION_TOKEN: bool = False
+    # API rate limiting (token bucket per client IP). The previous fixed
+    # 100 rps / burst 50 throttled legitimate bulk sweeps of the API: the
+    # full-surface sweep tripped 16 x 429 before it reached the last routes.
+    # Loopback and trusted-proxy callers — the desktop UI, the CLI and the
+    # endpoint sweeps — get their own, much larger budget below, while remote
+    # callers keep the conservative defaults so a runaway polling loop is
+    # still bounded.
+    RATE_LIMIT_RPS: float = 100.0
+    RATE_LIMIT_BURST: int = 50
+    RATE_LIMIT_RPS_LOCAL: float = 600.0
+    RATE_LIMIT_BURST_LOCAL: int = 300
     # A paused interceptor flow resumes automatically after this many seconds
     # (0 disables). Without a TTL the target's connection hangs forever if the
     # user closes the UI while an item is paused (BUG-09).

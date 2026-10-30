@@ -44,6 +44,13 @@ async function getSessionToken(): Promise<string | null> {
   return sessionTokenRequest
 }
 
+/** Drop the cached token so the next call re-reads it from the shell. */
+export function invalidateSessionToken() {
+  sessionToken = null
+}
+
+export { getSessionToken }
+
 apiClient.interceptors.request.use(async (config) => {
   const token = await getSessionToken()
   if (token) {
@@ -51,6 +58,23 @@ apiClient.interceptors.request.use(async (config) => {
   }
   return config
 })
+
+// 429 handling: at most two retries, and only for requests that are safe to
+// repeat. A POST/PUT is left to the caller — replaying it could duplicate the
+// work the user asked for.
+const MAX_429_RETRIES = 2
+const IDEMPOTENT_METHODS = new Set(['get', 'head', 'options'])
+
+/** Convert a Retry-After header (seconds or HTTP date) to a bounded delay. */
+function retryAfterMs(value: unknown): number | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const seconds = Number(value)
+  const ms = Number.isFinite(seconds)
+    ? seconds * 1000
+    : Date.parse(value) - Date.now()
+  if (!Number.isFinite(ms)) return null
+  return Math.min(Math.max(ms, 1000), 10_000)
+}
 
 apiClient.interceptors.response.use(
   (response) => response,
@@ -69,6 +93,21 @@ apiClient.interceptors.response.use(
       const token = await getSessionToken()
       if (token) {
         config.headers.set('X-Nyx-Token', token)
+        return apiClient.request(config)
+      }
+    }
+    // A bulk sweep (or a burst of component mounts) can legitimately exceed
+    // the API rate limiter. Retry the idempotent calls with backoff instead of
+    // surfacing a 429 as a failure; the limiter's Retry-After wins when sent.
+    if (error.response?.status === 429 && config) {
+      const attempts = Number((config as any).__nyx429Retry ?? 0)
+      const method = String(config.method ?? 'get').toLowerCase()
+      if (attempts < MAX_429_RETRIES && IDEMPOTENT_METHODS.has(method)) {
+        ;(config as any).__nyx429Retry = attempts + 1
+        const wait = retryAfterMs(error.response.headers?.['retry-after'])
+        await new Promise((resolve) =>
+          setTimeout(resolve, wait ?? 300 * 2 ** attempts),
+        )
         return apiClient.request(config)
       }
     }

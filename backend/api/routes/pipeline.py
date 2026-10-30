@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
+from api.deps import ensure_authorized
+from core.authorization import authorize
 from modules.pipeline.orchestrator import ScanPipeline
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
@@ -8,7 +10,8 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 class StartPipelineRequest(BaseModel):
     target_url: str
-    session_id: str | None = None
+    # Required: the pipeline crawls, fuzzes and actively scans the target.
+    session_id: str
     config: dict = {}
 
 
@@ -26,10 +29,14 @@ def get_pipeline(request: Request) -> ScanPipeline:
 
 @router.post("/start")
 async def start_pipeline(body: StartPipelineRequest, request: Request):
+    decision = await authorize(
+        body.session_id, body.target_url, require_session=True
+    )
+    ensure_authorized(*decision)
     pipeline = get_pipeline(request)
     result = await pipeline.start_pipeline(
         target_url=body.target_url,
-        session_id=body.session_id or "",
+        session_id=body.session_id,
         config=body.config,
     )
     return result

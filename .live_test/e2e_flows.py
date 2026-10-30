@@ -150,8 +150,11 @@ def main() -> int:
                f"total={after.get('total')}")
 
     # --- repeater / custom scanner --------------------------------------
+    # session_id is mandatory: Repeater sends real requests, so it is gated by
+    # the engagement's scope and the RoE like every other active endpoint.
     repeater = call("repeater send", "POST", "/api/repeater/send",
-                    json={"method": "GET", "url": TARGET + "/?q=1", "headers": {}, "body": None})
+                    json={"method": "GET", "url": TARGET + "/?q=1", "headers": {},
+                          "body": None, "session_id": sid})
     record("repeater got response", bool(repeater and repeater.get("status") == 200),
            str(repeater and repeater.get("status")))
 

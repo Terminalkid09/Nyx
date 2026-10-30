@@ -212,5 +212,162 @@ async def test_retest_refuses_a_target_that_is_no_longer_authorized(client, monk
     assert "not authorized" in response.json()["detail"]
 
 
+@pytest.mark.asyncio
+async def test_retest_of_active_finding_without_request_id(client, monkeypatch):
+    """An active scan on a custom URL has no captured request; retest must work anyway.
+
+    The live review reproduced ``400 Associated request not found`` right after
+    an active scan created a finding with ``request_id=null``.
+    """
+    from core.events.bus import EventBus
+    from core.storage.crud.sessions import create_session
+    from core.storage.finding_events import persist_results
+    from modules.scanner.base_check import CheckResult
+
+    async with AsyncSessionLocal() as db:
+        session = await create_session(db, name=f"active-{uuid.uuid4().hex[:6]}")
+        session_id = session.id
+
+    result = CheckResult(
+        triggered=True,
+        severity="high",
+        title="SQL Injection",
+        description="id is injectable",
+        evidence="Payload reflected",
+        cwe="CWE-89",
+        param="id",
+    )
+    await persist_results(
+        EventBus(),
+        [result],
+        {
+            "session_id": str(session_id),
+            "method": "GET",
+            "url": "https://target.test/item?id=1",
+            "request_headers": {"Host": "target.test"},
+            "request_body": None,
+            "response_status": 200,
+        },
+        "active_sqli",
+        source="active",
+    )
+
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import select
+
+        finding = (
+            await db.execute(
+                select(Finding).where(Finding.session_id == session_id).limit(1)
+            )
+        ).scalar_one()
+        assert finding.request_id is not None
+        request = await db.get(Request, finding.request_id)
+        assert request is not None
+        assert request.url == "https://target.test/item?id=1"
+        assert request.response_status == 200
+        finding_id = finding.id
+
+    class _Response:
+        status_code = 200
+        content = b"still vulnerable"
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def request(self, *args, **kwargs):
+            return _Response()
+
+    import api.routes.smart_triage as triage
+
+    monkeypatch.setattr(triage, "authorize", lambda *a, **k: _allow())
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: _Client())
+
+    async with client as c:
+        response = await c.get(f"/api/triage/findings/{finding_id}/retest")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == "confirmed"
+
+
 async def _allow():
     return (True, "roe", "")
+
+
+async def _seed_evidence_only(evidence: str | None) -> tuple[str, str]:
+    """Session + finding with no Request row: the evidence is all there is."""
+    async with AsyncSessionLocal() as db:
+        from core.storage.crud.sessions import create_session
+
+        session = await create_session(db, name=f"triage-evidence-{uuid.uuid4().hex[:6]}")
+        finding = Finding(
+            session_id=session.id,
+            request_id=None,
+            module="active_sqli",
+            severity=SeverityEnum.HIGH,
+            title="SQL Injection",
+            description="id is injectable",
+            evidence=evidence,
+            cwe="CWE-89",
+        )
+        db.add(finding)
+        await db.commit()
+        return str(session.id), str(finding.id)
+
+
+@pytest.mark.asyncio
+async def test_retest_replays_a_finding_whose_request_row_is_gone(client, monkeypatch):
+    """Old findings have no Request row; the stored curl evidence is replayable."""
+    _session_id, finding_id = await _seed_evidence_only(
+        "Boolean payload changed the response\n\nReproduce:\n"
+        "curl -i -X GET 'https://target.test/item?id=1%27+OR+1%3D1--'\n\n"
+        "# response: 200"
+    )
+    called: dict = {}
+
+    class _Response:
+        status_code = 200
+        content = b"admin"
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def request(self, *args, **kwargs):
+            called["method"] = args[0] if args else kwargs.get("method")
+            called["url"] = args[1] if len(args) > 1 else kwargs.get("url")
+            return _Response()
+
+    import api.routes.smart_triage as triage
+
+    monkeypatch.setattr(triage, "authorize", lambda *a, **k: _allow())
+    monkeypatch.setattr("httpx.AsyncClient", lambda *a, **k: _Client())
+
+    async with client as c:
+        response = await c.get(f"/api/triage/findings/{finding_id}/retest")
+
+    assert response.status_code == 200, response.text
+    assert called["method"] == "get"
+    assert called["url"] == "https://target.test/item?id=1%27+OR+1%3D1--"
+    # The evidence carries no baseline status, so a re-send alone cannot confirm
+    # anything: the operator decides.
+    assert response.json()["result"] == "needs_review"
+
+
+@pytest.mark.asyncio
+async def test_retest_reports_not_retestable_instead_of_a_generic_400(client):
+    _session_id, finding_id = await _seed_evidence_only(None)
+
+    async with client as c:
+        response = await c.get(f"/api/triage/findings/{finding_id}/retest")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"] == "not_retestable"
+    assert body["triage_status"] == "open"

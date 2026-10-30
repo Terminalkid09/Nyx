@@ -101,6 +101,27 @@ def test_doctype_is_rejected_before_the_parser_expands_it():
         burp.parse_document(payload)
 
 
+def test_doctype_is_rejected_after_large_padding():
+    """The old check only looked at the first 4096 bytes (bypass)."""
+    padding = "<!-- " + ("x" * 8192) + " -->"
+    payload = f"""<?xml version="1.0"?>
+{padding}
+<!DOCTYPE items [<!ENTITY a "aaaa">]>
+<items><item><url>https://acme.test/&a;</url></item></items>"""
+    with pytest.raises(burp.BurpImportError, match="DOCTYPE"):
+        burp.parse_document(payload)
+
+
+def test_entity_reference_is_rejected_after_large_padding():
+    padding = "<!-- " + ("x" * 8192) + " -->"
+    payload = f"""<?xml version="1.0"?>
+{padding}
+<!ENTITY boom "xxxxxxxx">
+<items><item><url>https://acme.test/boom</url></item></items>"""
+    with pytest.raises(burp.BurpImportError, match="DOCTYPE"):
+        burp.parse_document(payload)
+
+
 @pytest.mark.asyncio
 async def test_endpoint_imports_and_applies_scope():
     document = _export(

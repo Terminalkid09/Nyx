@@ -12,9 +12,23 @@
  * - Prevents duplicate `onclose` listeners accumulating on reconnect.
  */
 
+import { getSessionToken, invalidateSessionToken } from './client'
+
 type EventHandler = (data: any) => void
 
 const MAX_RETRIES = 10
+
+/**
+ * Add the per-boot token to the socket URL.
+ *
+ * Browsers cannot set headers on a WebSocket, so token mode authenticates the
+ * upgrade with a query parameter. Exported for unit tests.
+ */
+export function buildWsUrl(base: string, token: string | null): string {
+  if (!token) return base
+  const separator = base.includes('?') ? '&' : '?'
+  return `${base}${separator}token=${encodeURIComponent(token)}`
+}
 
 class NyxWebSocket {
   private ws: WebSocket | null = null
@@ -23,6 +37,9 @@ class NyxWebSocket {
   private retryCount = 0
   private _isConnected = false
   private url: string
+  // Invalidates an in-flight connect() when reconnect() is called or a newer
+  // connect() starts, so a slow token lookup cannot open a duplicate socket.
+  private connectGeneration = 0
 
   constructor(url: string) {
     this.url = url
@@ -32,7 +49,7 @@ class NyxWebSocket {
     return this._isConnected
   }
 
-  connect() {
+  async connect(): Promise<void> {
     // Prevent double-connect
     if (
       this.ws &&
@@ -42,7 +59,25 @@ class NyxWebSocket {
       return
     }
 
-    this.ws = new WebSocket(this.url)
+    const generation = ++this.connectGeneration
+    // A failed token lookup is not fatal: token mode is off in dev, and the
+    // backend answers 1008 in token mode so onclose can retry with a fresh read.
+    let token: string | null
+    try {
+      token = await getSessionToken()
+    } catch {
+      token = null
+    }
+    if (generation !== this.connectGeneration) return
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return
+    }
+
+    this.ws = new WebSocket(buildWsUrl(this.url, token))
 
     this.ws.onopen = () => {
       console.log('[Nyx WS] Connected')
@@ -62,9 +97,15 @@ class NyxWebSocket {
       }
     }
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event: CloseEvent) => {
       this._isConnected = false
       this._emit('ws.disconnected', { connected: false })
+
+      // 1008: the backend rejected the token (usually a restart rotated it).
+      // Drop the cache so the retry re-reads the current token from the shell.
+      if (event.code === 1008) {
+        invalidateSessionToken()
+      }
 
       if (this.retryCount >= MAX_RETRIES) {
         console.error(
@@ -94,13 +135,15 @@ class NyxWebSocket {
   reconnect() {
     this.retryCount = 0
     this.reconnectDelay = 1000
+    // Cancel a connect() still waiting for the token.
+    this.connectGeneration++
     if (this.ws) {
       // Suppress the auto-reconnect triggered by this close
       this.ws.onclose = null
       this.ws.close()
     }
     this._isConnected = false
-    this.connect()
+    void this.connect()
   }
 
   on(type: string, handler: EventHandler): () => void {

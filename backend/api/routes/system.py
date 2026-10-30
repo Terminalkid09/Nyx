@@ -19,6 +19,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from core.config import settings
+from core.version import VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ async def health(request: Request):
     return {
         "status": "ok" if (db_ok and proxy_ok) else "degraded",
         "app": "Nyx",
-        "version": "1.0.0",
+        "version": VERSION,
         "uptime_sec": int(_time.time() - start_time),
         "database": {"ok": db_ok, "error": db_error},
         "proxy": {

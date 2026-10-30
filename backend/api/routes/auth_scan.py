@@ -6,6 +6,8 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from api.deps import ensure_authorized
+from core.authorization import authorize
 from modules.auth.models import AuthProfile, MacroStep
 from modules.auth.store import list_profiles, get_profile, create_profile, update_profile, delete_profile
 from modules.scanner.active.scanner import ActiveScanner
@@ -40,9 +42,8 @@ class AuthenticatedScanRequest(BaseModel):
     target_url: str
     params: list[str] = []
     profile: AuthProfile | None = None
-    # Without this the scan bypasses the session scope rules: run_checks only
-    # enforces scope when the event carries a session_id.
-    session_id: str | None = None
+    # Required: it is a full active scan against the target.
+    session_id: str
 
 
 @router.post("/login/record", response_model=LoginRecordResponse)
@@ -108,6 +109,9 @@ async def auth_scan(req: AuthenticatedScanRequest):
         profile = req.profile
     else:
         raise HTTPException(status_code=400, detail="Either profile_id or profile must be provided")
+
+    decision = await authorize(req.session_id, req.target_url, require_session=True)
+    ensure_authorized(*decision)
 
     base_request = {
         "method": "GET",

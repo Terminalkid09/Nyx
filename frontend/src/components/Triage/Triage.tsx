@@ -98,7 +98,9 @@ export function Triage() {
           ? `Retest: still reproducible (${result.status_code ?? 'n/a'}) — marked confirmed.`
           : result.result === 'needs_review'
             ? `Retest: response changed (${result.status_code ?? 'n/a'}) — needs review.`
-            : `Retest failed: ${result.evidence}`,
+            : result.result === 'not_retestable'
+              ? `This finding cannot be re-sent: ${result.evidence}`
+              : `Retest failed: ${result.evidence}`,
       )
       await fetch()
     } catch (error) {

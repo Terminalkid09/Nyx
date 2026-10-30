@@ -56,7 +56,8 @@ def transport():
 
 @pytest.mark.asyncio
 async def test_verify_endpoint_returns_verdict(monkeypatch, transport):
-    async def allow(session_id, url):
+    async def allow(session_id, url, **kwargs):
+        assert kwargs.get("require_session") is True
         return True, None, None
 
     class FakeVerdict:
@@ -77,6 +78,7 @@ async def test_verify_endpoint_returns_verdict(monkeypatch, transport):
                 "url": "https://example.com/?id=1",
                 "param": "id",
                 "payload": "1' OR 1=1--",
+                "session_id": "11111111-1111-1111-1111-111111111111",
             },
         )
     assert response.status_code == 200
@@ -85,21 +87,39 @@ async def test_verify_endpoint_returns_verdict(monkeypatch, transport):
 
 @pytest.mark.asyncio
 async def test_verify_endpoint_blocks_out_of_scope(monkeypatch, transport):
-    async def deny(session_id, url):
+    async def deny(session_id, url, **kwargs):
         return False, "roe", "no_authorization_profile"
 
     monkeypatch.setattr("api.routes.verifier.authorize", deny)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
-            "/api/auto-exploit/verify", json={"url": "https://example.com/"}
+            "/api/auto-exploit/verify",
+            json={
+                "url": "https://example.com/",
+                "session_id": "11111111-1111-1111-1111-111111111111",
+            },
         )
     assert response.status_code == 403
 
 
 @pytest.mark.asyncio
+async def test_verify_endpoint_requires_a_session(monkeypatch, transport):
+    async def should_not_run(*args, **kwargs):
+        raise AssertionError("verification ran without a session")
+
+    monkeypatch.setattr("api.routes.verifier.run_verification", should_not_run)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/auto-exploit/verify", json={"url": "https://example.com/"}
+        )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_verify_endpoint_checks_injected_url(monkeypatch, transport):
-    async def conditional(session_id, url):
+    async def conditional(session_id, url, **kwargs):
         if url == "https://example.com/?id=1":
             return True, None, None
         return False, "roe", "excluded"
@@ -117,6 +137,7 @@ async def test_verify_endpoint_checks_injected_url(monkeypatch, transport):
                 "url": "https://example.com/?id=1",
                 "param": "id",
                 "payload": "1' OR 1=1--",
+                "session_id": "11111111-1111-1111-1111-111111111111",
             },
         )
     assert response.status_code == 403

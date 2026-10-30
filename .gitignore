@@ -155,3 +155,7 @@ test_stderr.log
 .freebuff/
 freebuff-chat-*.md
 
+
+# Live-test scratch data (isolated databases, session tokens, generated TLS)
+.live_test/live_run/
+.live_test/tls/

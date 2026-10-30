@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Key, Plus, Trash2, Shield } from 'lucide-react'
 import { listAuthProfiles, createAuthProfile, deleteAuthProfile, runAuthScan, AuthProfile } from '../../api/endpoints/authScan'
+import { useSessionStore } from '../../store/useSessionStore'
 
 export function AuthScan() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [profiles, setProfiles] = useState<AuthProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -27,7 +29,7 @@ export function AuthScan() {
 
   const handleScan = async (profileId: string, targetUrl: string) => {
     setScanning(true); setScanResult(null)
-    try { setScanResult(await runAuthScan(profileId, targetUrl)) } catch (e: any) { setScanResult({ error: e?.response?.data?.detail || 'Scan failed' }) }
+    try { setScanResult(await runAuthScan(profileId, targetUrl, activeSessionId)) } catch (e: any) { setScanResult({ error: e?.response?.data?.detail || 'Scan failed' }) }
     finally { setScanning(false) }
   }
 

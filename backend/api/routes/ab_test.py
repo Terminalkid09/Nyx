@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from api.deps import ensure_authorized
 from core.authorization import authorize
 from modules.ab_test.service import Identity, run_comparison
 
@@ -28,7 +29,7 @@ class ABTestRequest(BaseModel):
     # The anonymous leg is what turns "both users see the same page" into
     # "nobody needs to log in at all".
     anonymous: bool = True
-    session_id: str | None = None
+    session_id: str
 
 
 @router.post("/run")
@@ -38,13 +39,12 @@ async def run(body: ABTestRequest) -> dict:
         raise HTTPException(400, detail="url must be an absolute http(s) URL")
 
     try:
-        session_id = uuid.UUID(body.session_id) if body.session_id else None
-    except ValueError:
+        session_id = uuid.UUID(body.session_id)
+    except (TypeError, ValueError):
         raise HTTPException(400, detail="session_id is not a UUID")
 
-    allowed, kind, detail = await authorize(session_id, body.url)
-    if not allowed:
-        raise HTTPException(403, f"Target not authorized ({kind}: {detail})")
+    decision = await authorize(session_id, body.url, require_session=True)
+    ensure_authorized(*decision)
 
     try:
         result = await run_comparison(

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from api.deps import get_db
 from core.storage.models import TargetScopeRule
 from core.scope import check_scope as _check_scope
@@ -56,6 +56,9 @@ class RuleResponse(BaseModel):
 
 class CheckScopeBody(BaseModel):
     url: str
+    # The preview must answer for the engagement the operator is working in,
+    # not for whatever rule set happens to be in the database.
+    session_id: uuid.UUID | None = None
     rules: list[dict] | None = None
 
 
@@ -87,7 +90,14 @@ DOMAIN_PATTERN_SUGGESTIONS = [
 async def list_rules(session_id: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)):
     q = select(TargetScopeRule)
     if session_id:
-        q = q.where(TargetScopeRule.session_id == session_id)
+        # Show the rules that actually apply to this engagement: its own plus
+        # the legacy global defaults.
+        q = q.where(
+            or_(
+                TargetScopeRule.session_id == session_id,
+                TargetScopeRule.session_id.is_(None),
+            )
+        )
     q = q.order_by(TargetScopeRule.order)
     result = await db.execute(q)
     return list(result.scalars().all())
@@ -142,7 +152,15 @@ async def check_scope_endpoint(body: CheckScopeBody, db: AsyncSession = Depends(
     if body.rules is not None:
         rules = [TargetScopeRule(**r) for r in body.rules]
     else:
-        result = await db.execute(select(TargetScopeRule).order_by(TargetScopeRule.order))
+        query = select(TargetScopeRule).order_by(TargetScopeRule.order)
+        if body.session_id is not None:
+            query = query.where(
+                or_(
+                    TargetScopeRule.session_id == body.session_id,
+                    TargetScopeRule.session_id.is_(None),
+                )
+            )
+        result = await db.execute(query)
         rules = list(result.scalars().all())
     in_scope, matched_rule, matched_by = _check_scope(body.url, rules)
     return CheckScopeResponse(in_scope=in_scope, matched_rule=matched_rule, matched_by=matched_by)

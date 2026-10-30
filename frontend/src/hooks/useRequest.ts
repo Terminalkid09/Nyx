@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { apiClient } from '../api/client'
+import { useSessionStore } from '../store/useSessionStore'
 
 export function useRequest() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -14,6 +16,7 @@ export function useRequest() {
         url,
         headers,
         body: body || null,
+        session_id: activeSessionId,
       })
       return data
     } catch (err: any) {

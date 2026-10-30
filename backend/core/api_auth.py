@@ -22,21 +22,42 @@ logger = logging.getLogger(__name__)
 # Protects the local API from accidental or malicious DoS (buggy frontend loop,
 # malware on the same machine). In a localhost-only desktop app the risk is low
 # but non-zero: a runaway React effect can hammer /api/proxy/requests at 1 kHz
-# and starve the proxy engine. 100 req/s with bursts of 50 is generous enough
-# for the UI polling loop (~10 req/s) while blocking abuse.
-_RATE_LIMIT_RPS = 100.0           # sustained requests per second per IP
-_RATE_LIMIT_BURST = 50            # instantaneous burst allowance
+# and starve the proxy engine. The loopback budget is therefore generous enough
+# for the UI polling loop and for an endpoint sweep (~10 req/s steady, a few
+# hundred in a burst) while still bounding abuse; remote callers keep the
+# conservative default. Both tiers are configurable in Settings.
+#
+# The constants below mirror the remote-tier defaults at import time; the
+# limiter itself reads Settings on every call so a deployment (or a test) can
+# change the budget without patching this module.
+_RATE_LIMIT_RPS = settings.RATE_LIMIT_RPS
+_RATE_LIMIT_BURST = settings.RATE_LIMIT_BURST
 _RATE_LIMIT_BUCKETS: dict[str, tuple[float, float]] = {}  # ip -> (tokens, last_refill)
 _RATE_LIMIT_LOCK = threading.Lock()
 
 
+def _rate_limit_budget(ip: str) -> tuple[float, int]:
+    """Return ``(rps, burst)`` for this client.
+
+    Loopback and trusted-proxy peers are the UI, the CLI and the sweeps that
+    walk every endpoint; they are also the callers the desktop app itself
+    makes. Throttling them to a 50-request burst made a legitimate sweep
+    collect 429s, so they get a separate, larger budget. Everything else
+    (a local process talking from a non-loopback address) keeps the default.
+    """
+    if ip in _LOOPBACK_HOSTS or is_trusted_proxy(ip):
+        return settings.RATE_LIMIT_RPS_LOCAL, settings.RATE_LIMIT_BURST_LOCAL
+    return settings.RATE_LIMIT_RPS, settings.RATE_LIMIT_BURST
+
+
 def _check_rate_limit(ip: str) -> bool:
     """Return True if the request is allowed, False if rate-limited."""
+    rps, burst = _rate_limit_budget(ip)
     now = time.monotonic()
     with _RATE_LIMIT_LOCK:
-        tokens, last = _RATE_LIMIT_BUCKETS.get(ip, (_RATE_LIMIT_BURST, now))
+        tokens, last = _RATE_LIMIT_BUCKETS.get(ip, (float(burst), now))
         elapsed = now - last
-        tokens = min(_RATE_LIMIT_BURST, tokens + elapsed * _RATE_LIMIT_RPS)
+        tokens = min(float(burst), tokens + elapsed * rps)
         if tokens < 1.0:
             return False
         _RATE_LIMIT_BUCKETS[ip] = (tokens - 1.0, now)
@@ -81,7 +102,6 @@ SESSION_TOKEN = _new_session_token()
 # removal pages, and the MITM portal a target device is sent to. They are also
 # exempt from the API key for the same reason.
 _TOKEN_EXEMPT_PATHS = {
-    "/api/auth/key",
     "/api/ca-certificate", "/api/ca-qr",
     "/api/ca-uninstall", "/api/ca-uninstall-qr",
 }
@@ -188,7 +208,6 @@ async def verify_api_key(request: Request, call_next):
 
     # Certain API paths need no key
     safe_paths = {
-        "/api/auth/key",
         "/api/ca-certificate", "/api/ca-qr",
         "/api/ca-uninstall", "/api/ca-uninstall-qr",
         "/api/mitm/portal", "/api/mitm/portal/checkin",
@@ -248,3 +267,35 @@ def validate_ws_origin(ws: WebSocket) -> bool:
     except Exception:  # noqa: BLE001 — scope may be incomplete in tests
         return False
     return port == target_port
+
+
+def _ws_token(ws: WebSocket) -> str:
+    """Read the per-boot token from the upgrade request.
+
+    Browsers cannot set custom headers on a WebSocket, so the UI passes the
+    token as a query parameter. Non-browser clients may use the same header as
+    the REST API. Only the first accepted source is checked, which keeps the
+    comparison unambiguous.
+    """
+    header_token = ws.headers.get("x-nyx-token", "")
+    if header_token:
+        return header_token
+    try:
+        return ws.query_params.get("token", "") or ""
+    except Exception:  # noqa: BLE001 — incomplete scope in tests
+        return ""
+
+
+def validate_ws_token(ws: WebSocket) -> bool:
+    """Enforce the per-boot session token on WebSocket upgrades.
+
+    Origin validation alone only stops *browser* pages: a local script can
+    open the socket with no Origin at all and read every intercepted request.
+    In desktop/token mode the upgrade must therefore carry the same secret as
+    the REST API, or the socket is closed with 1008 before any event is sent.
+    Dev mode and the CLI (token gate off) keep the previous behavior.
+    """
+    if not settings.API_REQUIRE_SESSION_TOKEN:
+        return True
+    given = _ws_token(ws)
+    return bool(given) and hmac.compare_digest(given, SESSION_TOKEN)

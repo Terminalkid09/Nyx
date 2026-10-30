@@ -5,10 +5,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from api.deps import get_db
+from api.deps import ensure_authorized, get_db
+from core.authorization import authorize
 from core.storage.models import ContentDiscoveryJob
 from core.storage.database import AsyncSessionLocal
-from core.storage.traffic import DEFAULT_SESSION_ID
 from core.events.bus import EventBus
 from modules.content_discovery.service import ContentDiscoveryService
 from pydantic import BaseModel
@@ -27,7 +27,9 @@ class StartDiscoveryRequest(BaseModel):
     extensions: list[str] = [""]
     methods: list[str] = ["GET"]
     throttle_ms: int = 0
-    session_id: str | None = None
+    # Required: discovery sends thousands of requests and must inherit the
+    # session's scope rules instead of falling back to the default session.
+    session_id: str
     concurrency: int = 20
     recursive: bool = False
     max_depth: int = 1
@@ -117,10 +119,15 @@ async def _run_discovery_in_background(
 
 @router.post("/start", response_model=StartDiscoveryResponse, status_code=201)
 async def start_discovery(body: StartDiscoveryRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    decision = await authorize(
+        body.session_id, body.target_url, require_session=True
+    )
+    ensure_authorized(*decision)
     try:
-        session_uuid = uuid.UUID(body.session_id) if body.session_id else DEFAULT_SESSION_ID
-    except ValueError:
-        session_uuid = DEFAULT_SESSION_ID
+        session_uuid = uuid.UUID(body.session_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, detail="session_id is not a UUID")
+
     job = ContentDiscoveryJob(
         session_id=session_uuid,
         target_url=body.target_url,

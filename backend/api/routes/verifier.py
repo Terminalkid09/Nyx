@@ -5,6 +5,7 @@ import urllib.parse
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from api.deps import ensure_authorized
 from core.authorization import authorize
 from modules.auto_exploit.verifier import run_verification
 
@@ -18,7 +19,9 @@ class VerifyRequest(BaseModel):
     body: str | None = None
     param: str | None = None
     payload: str | None = None
-    session_id: str | None = None
+    # Required: verification sends two real requests and must stay inside the
+    # engagement that authorized the target.
+    session_id: str
 
 
 def inject_query(url: str, param: str, payload: str) -> str:
@@ -33,11 +36,8 @@ async def verify(body: VerifyRequest):
     if body.param and body.payload is None:
         raise HTTPException(400, "payload is required when param is set")
 
-    allowed, kind, detail = await authorize(body.session_id, body.url)
-    if not allowed:
-        raise HTTPException(
-            403, f"Target not authorized ({kind}: {detail})"
-        )
+    decision = await authorize(body.session_id, body.url, require_session=True)
+    ensure_authorized(*decision)
 
     baseline_request = {
         "method": body.method.upper(),
@@ -52,13 +52,10 @@ async def verify(body: VerifyRequest):
         # different RoE exclusion (query/path patterns), so it needs its own
         # authorization decision.
         if injected_request["url"] != body.url:
-            allowed, kind, detail = await authorize(
-                body.session_id, injected_request["url"]
+            decision = await authorize(
+                body.session_id, injected_request["url"], require_session=True
             )
-            if not allowed:
-                raise HTTPException(
-                    403, f"Target not authorized ({kind}: {detail})"
-                )
+            ensure_authorized(*decision)
 
     from core.roe import pace
 

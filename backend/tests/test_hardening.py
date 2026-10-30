@@ -53,6 +53,54 @@ class TestWsOriginValidation:
         assert validate_ws_origin(self._ws("file:///etc/passwd")) is False
 
 
+class TestWsTokenValidation:
+    """SEC: token mode must also cover WebSocket upgrades (no Origin is not trust)."""
+
+    def _ws(self, token=None, query=None, header_token=None):
+        headers = {}
+        if token is not None:
+            headers["x-nyx-token"] = token
+        if header_token is not None:
+            headers["x-nyx-token"] = header_token
+        return SimpleNamespace(headers=headers, query_params=query or {})
+
+    def test_gate_is_off_by_default(self, monkeypatch):
+        from core import api_auth
+        monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", False)
+        assert api_auth.validate_ws_token(self._ws()) is True
+
+    def test_rejects_without_token(self, monkeypatch):
+        from core import api_auth
+        monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", True)
+        assert api_auth.validate_ws_token(self._ws()) is False
+
+    def test_rejects_wrong_token(self, monkeypatch):
+        from core import api_auth
+        monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", True)
+        assert api_auth.validate_ws_token(self._ws(header_token="wrong")) is False
+
+    def test_accepts_header_token(self, monkeypatch):
+        from core import api_auth
+        monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", True)
+        assert api_auth.validate_ws_token(
+            self._ws(header_token=api_auth.SESSION_TOKEN)
+        ) is True
+
+    def test_accepts_query_token(self, monkeypatch):
+        from core import api_auth
+        monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", True)
+        assert api_auth.validate_ws_token(
+            self._ws(query={"token": api_auth.SESSION_TOKEN})
+        ) is True
+
+    def test_header_wins_over_query(self, monkeypatch):
+        from core import api_auth
+        monkeypatch.setattr(api_auth.settings, "API_REQUIRE_SESSION_TOKEN", True)
+        assert api_auth.validate_ws_token(
+            self._ws(header_token="wrong", query={"token": api_auth.SESSION_TOKEN})
+        ) is False
+
+
 # ── Scan job queue ordering (SQLite-portable) ────────────────────────────────
 
 @pytest_asyncio.fixture

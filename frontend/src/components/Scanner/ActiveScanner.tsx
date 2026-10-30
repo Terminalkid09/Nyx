@@ -73,6 +73,8 @@ export function ActiveScanner() {
     let scanMethod: string
     let scanHeaders: Record<string, string>
     let scanBody: string
+    let scanRequestId: string | null = null
+    let scanResponseStatus: number | null = null
 
     if (useCustomUrl) {
       if (!customUrl) { setError('Enter a target URL'); return }
@@ -99,6 +101,10 @@ export function ActiveScanner() {
       scanMethod = req.method
       scanHeaders = req.request_headers || {}
       scanBody = req.request_body || ''
+      // Link the findings to the captured request so triage "retest" can
+      // replay exactly this request instead of failing with no association.
+      scanRequestId = req.id
+      scanResponseStatus = req.response_status ?? null
     }
     if (selectedChecks.length === 0) return
 
@@ -114,6 +120,9 @@ export function ActiveScanner() {
           url: scanUrl,
           headers: scanHeaders,
           body: scanBody,
+          request_headers: scanHeaders,
+          request_body: scanBody,
+          response_status: scanResponseStatus,
         },
         target_params: params.length > 0 ? params : [''],
         checks: selectedChecks,
@@ -121,6 +130,7 @@ export function ActiveScanner() {
         // Without the session id the scan bypasses the session's scope rules
         // and the findings land in the default session.
         session_id: activeSessionId,
+        request_id: scanRequestId,
       })
       setResults(data.results || [])
     } catch (err: any) {

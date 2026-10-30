@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Play, Save, ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
 import { apiClient } from '../api/client'
+import { useSessionStore } from '../store/useSessionStore'
 
 interface Template {
   id: string
@@ -16,6 +17,7 @@ interface FormField {
 
 export function PipelineConfig() {
   const navigate = useNavigate()
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState('')
   const [targetUrl, setTargetUrl] = useState('')
@@ -124,6 +126,7 @@ export function PipelineConfig() {
 
   const buildConfig = () => ({
     target_url: targetUrl,
+    session_id: activeSessionId,
     crawl: {
       max_depth: crawlConfig.max_depth,
       max_pages: crawlConfig.max_pages,

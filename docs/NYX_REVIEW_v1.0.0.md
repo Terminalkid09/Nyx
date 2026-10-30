@@ -178,6 +178,50 @@ Corretto. Resta da ripetere l'avvio dell'EXE in una sessione elevata.
 shaping per client, mobile kit (F-06), plugin SDK (F-10). I numeri di §0.1 e
 §0.2 sono lo snapshot di quelle sessioni; i valori correnti sono in §2.
 
+### 0.3 Stato v2.0.0 — P0/P1 chiusi (30 ottobre 2026)
+
+Una verifica end-to-end indipendente (102 endpoint GET e 112 write, flussi live
+su target locale, CLI, Docker) ha prodotto una lista P0: la barriera di
+autorizzazione non era sistemica. **Tutti i P0 di quella lista sono chiusi su
+questo ramo**, più cinque voci P1. La release di riferimento diventa **v2.0.0**.
+
+**P0 — autorizzazione, token, scope**
+
+| Item | Fix | File |
+|---|---|---|
+| Bypass della scope omettendo `session_id` su scanner, verifier, crawler, A/B, content discovery, auth scan | `authorize(..., require_session=True)` fallisce chiuso su sessione assente o malformata; `ensure_authorized` mappa `missing_session`/`invalid_session` → 400 e `out_of_scope`/`roe` → 403. `session_id` è obbligatorio nel body di tutti questi endpoint | `core/authorization.py`, `api/deps.py`, `api/routes/{active_scanner,verifier,crawler,ab_test,content_discovery,auth_scan}.py` |
+| `auto-exploit/execute` e repeater senza alcun controllo di scope/RoE | Stesso gate fail-closed su entrambi (il repeater non ha una "modalità manuale" privilegiata: resta una richiesta attiva e va attribuita a una sessione) | `api/routes/{auto_exploit,repeater}.py` |
+| WebSocket `/ws/traffic` aggirava il token di boot (nessun Origin ⇒ handshake 101) | `validate_ws_token()` richiede il token per-boot anche senza `Origin` (header o `?token=`); rifiuto con close 1008 prima di qualunque evento. La validazione dell'Origin resta attiva | `core/api_auth.py`, `main.py` |
+| `/api/auth/key` esente dal token e restituiva la API key a qualunque processo locale | Rimossa da `_TOKEN_EXEMPT_PATHS`: richiede il token come ogni altra route. Restano esenti solo le pagine CA e `/api/mitm/portal*` | `core/api_auth.py` |
+| `POST /api/scope/check` ignorava la sessione e rispondeva con le regole di tutte le sessioni | Accetta `session_id` e filtra su regole della sessione + default globali | `api/routes/target_scope.py`, `frontend/src/components/TargetScope.tsx` |
+| Nessun test di regressione sulle chiamate senza `session_id` | Test dedicati: gate attivi, token HTTP e WS, hardening, Burp, triage, verifier, A/B; test unitario del client WebSocket (token in query) | `backend/tests/{test_active_gates,test_api_auth,test_hardening,test_triage_workflow,test_verifier,test_ab_test}.py`, `frontend/src/api/__tests__/websocket.test.ts` |
+
+**P1 — hardening e qualità**
+
+| Item | Fix | File |
+|---|---|---|
+| Bypass del gate DOCTYPE nell'import Burp (commento di ~5 KB prima del prologo) | Il documento viene scansionato **per intero**: `<!DOCTYPE`/`<!ENTITY` in qualunque punto ⇒ rifiuto prima del parsing | `modules/importer/burp.py`, `tests/test_burp_import.py` |
+| Retest del triage impossibile sui finding senza `request_id` (400 generico) | Fallback sull'URL/evidenza del finding e stato esplicito quando il retest non è possibile | `api/routes/smart_triage.py`, `frontend/src/components/Triage/` |
+| Versioni incoerenti (desktop 1.0.0, frontend 0.1.0, CLI 1.1.0, backend 1.0.0) | Sorgente unica `core/version.py` = **2.0.0**, usata da backend, CLI, desktop e frontend | `core/version.py`, `main.py`, `nyx_cli.py`, `desktop/package.json`, `frontend/package.json` |
+| Rate limiter rigido (100 req/s, burst 50) che produce 429 durante le sweep massicce | Budget configurabile e separato: `RATE_LIMIT_RPS`/`RATE_LIMIT_BURST` (100/50) per i client remoti, `RATE_LIMIT_RPS_LOCAL`/`RATE_LIMIT_BURST_LOCAL` (600/300) per loopback e proxy fidati; retry con backoff lato UI sulle chiamate idempotenti | `core/config.py`, `core/api_auth.py`, `frontend/src/api/client.ts` |
+| Test flaky (`test_monte_carlo_random`) e test di retention dipendente dall'ordine | Simulazione Monte Carlo con seed deterministico derivato dal campione (risultato riproducibile) e test di retention isolato dal resto del database | `modules/sequencer/service.py`, `tests/test_sequencer.py`, `tests/test_retention.py` |
+
+**Rinviato, con motivazione**
+
+- **SQLCipher di default**: non implementato come default. La cifratura a riposo
+  resta opt-in (`NYX_SQLCIPHER_KEY` + `pysqlcipher3`) e il requisito di
+  **full-disk encryption** sull'host è dichiarato esplicitamente in README e
+  threat model, perché una chiave gestita dall'app sulla stessa macchina non
+  aggiunge molto rispetto a BitLocker/FileVault.
+- **~430 warning ESLint `@typescript-eslint/no-explicit-any`**: debito accettato,
+  **0 errori**. La pulizia tipologica è un ticket a sé, non un fix di sicurezza.
+- **Roadmap funzionale (P2)**: l'intercettazione TLS è ora verificata live
+  (proxy → HTTPS self-signed → CA di Nyx → body decifrato e richiesta
+  persistita, vedi `docs/NYX_LIVE_TEST_REPORT.md`); restano da provare
+  l'intercettazione trasparente (WinDivert), l'AP Range multi-BSSID/shaping,
+  l'import sessione ZAP (v1.3), F-05 Sensor, F-06 mobile kit, F-08 import
+  PCAP, F-09 QUIC e F-10 plugin SDK.
+
 ---
 
 ## 1. Executive summary (la versione da 5 minuti)

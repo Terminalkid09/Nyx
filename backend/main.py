@@ -11,6 +11,7 @@ from core.events.bus import EventBus
 from core.proxy.engine import ProxyEngine
 from core.storage.database import init_db
 from core.storage.traffic import TrafficStorageService, ensure_default_session, DEFAULT_SESSION_ID
+from core.version import VERSION
 from api.websocket.manager import WebSocketManager
 
 # Structured JSON logging (env LOG_FORMAT=json). Plain text by default.
@@ -190,7 +191,7 @@ async def lifespan(app: FastAPI):
     # ── Audit trail ───────────────────────────────────────────────────
     from core.audit import start_audit_trail, log_audit
     start_audit_trail()
-    log_audit(action="nyx.started", detail=f"Version 1.0.0 — proxy {settings.PROXY_HOST}:{settings.PROXY_PORT}")
+    log_audit(action="nyx.started", detail=f"Version {VERSION} — proxy {settings.PROXY_HOST}:{settings.PROXY_PORT}")
     app.state.log_audit = log_audit
 
     scheduled_scan_service = ScheduledScanService(event_bus)
@@ -412,12 +413,18 @@ async def http_exception_handler(request, exc):
 
 @app.websocket("/ws/traffic")
 async def traffic_websocket(ws: WebSocket):
-    from core.api_auth import validate_ws_origin
+    from core.api_auth import validate_ws_origin, validate_ws_token
 
     if not validate_ws_origin(ws):
-        # Foreign origin (another web page scripting this socket) — refuse the
+        # Foreign origin (another web page scripting this socket) - refuse the
         # upgrade before accepting, so no traffic is ever streamed to it.
         logger.warning("Rejected WebSocket connection from foreign origin: %s", ws.headers.get("origin", ""))
+        await ws.close(code=1008)
+        return
+    if not validate_ws_token(ws):
+        # Token mode: no Origin is not proof of trust. A local process that did
+        # not read NYX_HOME/session.token must not stream captured traffic.
+        logger.warning("Rejected WebSocket connection without a valid session token")
         await ws.close(code=1008)
         return
     if ws_manager:

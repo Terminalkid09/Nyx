@@ -3,6 +3,7 @@ import { Globe, Play, XCircle, Settings, List, FileText, ChevronDown, ChevronRig
 import {  } from '../../api/client'
 import { startCrawl, stopCrawl, listCrawlJobs, getCrawlStatus, type CrawlJob } from '../../api/endpoints/crawler'
 import { useJobsStore } from '../../store/useJobsStore'
+import { useSessionStore } from '../../store/useSessionStore'
 
 function KeyValueEditor({ pairs, onChange, keyPlaceholder, valuePlaceholder }: {
   pairs: [string, string][]
@@ -174,6 +175,7 @@ function LoginMacroEditor({ steps, onChange }: {
 }
 
 export function Crawler() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const { jobs: storedJobs, setJob: storeJob, clearJob: clearStoredJob } = useJobsStore()
   const [startUrl, setStartUrl] = useState('')
   const [maxDepth, setMaxDepth] = useState(3)
@@ -222,6 +224,7 @@ export function Crawler() {
     try {
       const job = await startCrawl({
         start_url: startUrl,
+        session_id: activeSessionId,
         max_depth: maxDepth,
         max_pages: maxPages,
         scope_include: scopeInclude,

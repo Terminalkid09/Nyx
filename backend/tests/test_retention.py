@@ -15,6 +15,10 @@ async def test_retention_keeps_newest_by_timestamp():
     sid = uuid.uuid4()
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
+        # The retention cap is global (MAX_STORED_REQUESTS counts the whole
+        # table, not one session), so the test must own the table: rows left
+        # behind by other tests would be the newest ones and move the cutoff.
+        await db.execute(delete(Request))
         db.add(Session(id=sid, name=f"retention-{sid}"))
         await db.flush()
         for i in range(10):
@@ -54,6 +58,9 @@ async def test_retention_noop_below_cap():
     sid = uuid.uuid4()
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
+        # Same reason as above: an unrelated backlog would exceed the cap and
+        # make the purge delete this session's rows.
+        await db.execute(delete(Request))
         db.add(Session(id=sid, name=f"retention-noop-{sid}"))
         await db.flush()
         for i in range(3):

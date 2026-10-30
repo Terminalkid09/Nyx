@@ -45,7 +45,9 @@ export interface FindingUpdateResult {
 }
 
 export interface RetestResult {
-  result: 'confirmed' | 'needs_review' | 'error'
+  // 'not_retestable': the finding has no stored request to replay (an old
+  // finding whose request was purged, or one created without a URL).
+  result: 'confirmed' | 'needs_review' | 'error' | 'not_retestable'
   evidence: string
   status_code?: number
   triage_status?: TriageStatus

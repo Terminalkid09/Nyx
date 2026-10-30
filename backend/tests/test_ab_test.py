@@ -179,6 +179,7 @@ async def test_route_returns_the_diff(client, monkeypatch):
             "/api/ab-test/run",
             json={
                 "url": "https://target.test/api/items/1",
+                "session_id": "11111111-1111-1111-1111-111111111111",
                 "identity_a": {"name": "alice", "headers": {"Cookie": "session=alice"}},
                 "identity_b": {"name": "bob", "headers": {"Cookie": "session=bob"}},
             },
@@ -197,6 +198,7 @@ async def test_route_rejects_non_http_urls(client):
             "/api/ab-test/run",
             json={
                 "url": "file:///etc/passwd",
+                "session_id": "11111111-1111-1111-1111-111111111111",
                 "identity_a": {"name": "a"},
                 "identity_b": {"name": "b"},
             },
@@ -230,12 +232,27 @@ async def test_route_honours_the_authorization_gate(client, monkeypatch):
             "/api/ab-test/run",
             json={
                 "url": "https://target.test/",
+                "session_id": "11111111-1111-1111-1111-111111111111",
                 "identity_a": {"name": "a"},
                 "identity_b": {"name": "b"},
             },
         )
     assert response.status_code == 403
     assert "not authorized" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_route_requires_a_session(client):
+    async with client as c:
+        response = await c.post(
+            "/api/ab-test/run",
+            json={
+                "url": "https://target.test/",
+                "identity_a": {"name": "a"},
+                "identity_b": {"name": "b"},
+            },
+        )
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
