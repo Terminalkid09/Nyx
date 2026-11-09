@@ -65,6 +65,7 @@ const AttackPath = lazyNamed(() => import('./components/AttackPath/AttackPath'),
 const Verifier = lazyNamed(() => import('./components/Verifier/Verifier'), 'Verifier')
 const AbTest = lazyNamed(() => import('./components/AbTest/AbTest'), 'AbTest')
 const Importer = lazyNamed(() => import('./components/Importer/Importer'), 'Importer')
+const Network = lazyNamed(() => import('./components/Network/Network'), 'Network')
 
 function RouteFallback() {
   return (
@@ -180,6 +181,7 @@ export default function App() {
                 <Route path="/verifier" element={<RouteErrorBoundary><Verifier /></RouteErrorBoundary>} />
                 <Route path="/ab-test" element={<RouteErrorBoundary><AbTest /></RouteErrorBoundary>} />
                 <Route path="/import" element={<RouteErrorBoundary><Importer /></RouteErrorBoundary>} />
+                <Route path="/network" element={<RouteErrorBoundary><Network /></RouteErrorBoundary>} />
                 </Routes>
               </Suspense>
             </main>

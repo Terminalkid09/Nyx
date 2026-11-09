@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.egg-info/
 .venv/
+.venv*/
 venv/
 env/
 .env
@@ -58,6 +59,10 @@ startup.err
 captures/
 backend/captures/
 backend/stats/
+
+# Local dev scripts
+backend/live_feed.py
+
 # Reports
 backend/reports/
 nyx_reports/
@@ -90,7 +95,6 @@ desktop/dist_n*/
 desktop/*.yml
 desktop/latest*.yml
 *.blockmap
-!desktop/nyx-backend.spec
 
 # Frontend dist (root level — not desktop/dist)
 frontend/dist/
@@ -98,10 +102,6 @@ frontend/dist/
 # Nyx runtime
 test_stdout.log
 test_stderr.log
-*.nyx
-*.bloom
-startup.log
-startup.err
 
 # Database backups
 *.db.bak
@@ -145,8 +145,6 @@ tests/__pycache__/
 # Local build output (root dist/ + versioned installer copies)
 /dist/
 /dist-v*/
-test_stdout.log
-test_stderr.log
 
 # GitHub Actions
 !.github/
@@ -159,3 +157,4 @@ freebuff-chat-*.md
 # Live-test scratch data (isolated databases, session tokens, generated TLS)
 .live_test/live_run/
 .live_test/tls/
+# Freebuff client metadata

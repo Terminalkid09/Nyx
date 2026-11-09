@@ -10,7 +10,13 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
-from core.proxy.engine import quic_dropped_count, windivert_forwarded_count, windivert_last_forwarded
+from core.proxy.engine import (
+    quic_block_mode,
+    quic_dropped_count,
+    udp_policy_status,
+    windivert_forwarded_count,
+    windivert_last_forwarded,
+)
 from core.storage.traffic import MITM_SESSION_ID
 from modules.ca_portal import active_port
 
@@ -169,6 +175,10 @@ async def build_status(
         # QUIC/HTTP3 blocking: how many of the targets' UDP/443 packets were
         # dropped to force fallback to interceptable TCP/TLS.
         "quic_blocked_packets": quic_dropped_count(),
+        # QUIC handling mode (drop/allow) and the per-target UDP policy the
+        # network layer manages.
+        "quic_mode": quic_block_mode(),
+        "udp_policy": udp_policy_status(),
         # Live per-target activity (SNI + HTTP hosts, most recent first) —
         # works even when the target has NOT installed the Nyx CA.
         # Filtered to the *selected* targets: the tracker records every device

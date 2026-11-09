@@ -11,6 +11,7 @@ class TestDNSSpoofer:
         assert spoofer.dns_port == 53
         assert spoofer._running is False
 
+    @pytest.mark.asyncio
     async def test_start_stop(self):
         from modules.dns_spoof import DNSSpoofer
         spoofer = DNSSpoofer(spoof_ip="192.168.1.100")
@@ -22,6 +23,7 @@ class TestDNSSpoofer:
         await spoofer.stop()
         assert spoofer._running is False
 
+    @pytest.mark.asyncio
     async def test_stop_without_start(self):
         from modules.dns_spoof import DNSSpoofer
         spoofer = DNSSpoofer(spoof_ip="192.168.1.100")

@@ -33,7 +33,48 @@ export interface MitmStatus {
   ca_portal_url?: string | null
   tls_mitm?: boolean
   quic_blocked_packets?: number
+  // "drop" (force TCP fallback, default) | "allow" (QUIC passes through)
+  quic_mode?: 'drop' | 'allow'
+  udp_policy?: UdpPolicy
   activity?: Array<{ ip: string; host: string; count: number; last_seen: string }>
+  // Target-scoped packet feed (auto start/stop with the session)
+  packet_feed?: PacketFeedStatus
+}
+
+export interface PacketFeedStatus {
+  running: boolean
+  interface: string | null
+  targets: string[]
+  packets_buffered: number
+  error: string | null
+  started_ts: number | null
+}
+
+/** One packet summary from GET /api/mitm/packets (same shape as the
+ *  Network tab's packet list — src/dst/proto/ports, no payload). */
+export interface MitmPacket {
+  seq: number
+  timestamp: string
+  length: number
+  proto: 'tcp' | 'udp' | 'icmp' | 'arp' | 'ip' | 'other'
+  src?: string
+  dst?: string
+  sport?: number
+  dport?: number
+  eth_src?: string
+  eth_dst?: string
+}
+
+export interface UdpRule {
+  target: string
+  dst_port: number | null
+  action: 'drop' | 'pass'
+}
+
+export interface UdpPolicy {
+  rules: UdpRule[]
+  matched?: number
+  dropped?: number
 }
 
 export interface NetworkDevice {
@@ -80,6 +121,35 @@ export async function setTlsMitm(active: boolean): Promise<{ tls_mitm: boolean }
   return data
 }
 
+export async function setQuicMode(mode: 'drop' | 'allow'): Promise<{ mode: 'drop' | 'allow' }> {
+  const { data } = await apiClient.post('/api/mitm/quic', { mode })
+  return data
+}
+
+export async function getUdpPolicy(): Promise<UdpPolicy> {
+  const { data } = await apiClient.get('/api/mitm/udp')
+  return data
+}
+
+export async function addUdpRule(rule: {
+  target: string
+  dst_port: number | null
+  action: 'drop' | 'pass'
+}): Promise<UdpPolicy> {
+  const { data } = await apiClient.post('/api/mitm/udp/rules', rule)
+  return data
+}
+
+export async function removeUdpRule(index: number): Promise<UdpPolicy> {
+  const { data } = await apiClient.delete(`/api/mitm/udp/rules/${index}`)
+  return data
+}
+
+export async function clearUdpPolicy(): Promise<UdpPolicy> {
+  const { data } = await apiClient.post('/api/mitm/udp/clear')
+  return data
+}
+
 export async function scanNetwork(): Promise<NetworkDevice[]> {
   const { data } = await apiClient.get('/api/mitm/scan-network')
   return data
@@ -113,5 +183,27 @@ export interface CaRemovalResult {
 
 export async function removeCaFromHost(): Promise<CaRemovalResult> {
   const { data } = await apiClient.post<CaRemovalResult>('/api/ca/remove')
+  return data
+}
+
+export async function getMitmPackets(limit = 120): Promise<MitmPacket[]> {
+  const { data } = await apiClient.get('/api/mitm/packets', { params: { limit } })
+  return Array.isArray(data) ? data : []
+}
+
+/** Wireshark-style dissection of one feed packet (same shape as the
+ *  Network tab's GET /api/network/packets/{seq}). */
+export interface MitmPacketDetail {
+  seq: number
+  timestamp: string
+  length: number
+  sniffed_on: string
+  proto: string
+  layers: Array<{ name: string; fields: Record<string, string | { repr: string; raw: number }> }>
+  hexdump: string
+}
+
+export async function getMitmPacketDetail(seq: number): Promise<MitmPacketDetail> {
+  const { data } = await apiClient.get(`/api/mitm/packets/${seq}`)
   return data
 }

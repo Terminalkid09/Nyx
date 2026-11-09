@@ -19,7 +19,14 @@ from core.proxy.engine import (
     dhcp_block_clear,
     quic_block_set_targets,
     quic_block_clear,
+    quic_block_set_mode,
+    quic_block_mode,
+    quic_block_status,
     quic_dropped_count,
+    udp_policy_add,
+    udp_policy_clear,
+    udp_policy_remove,
+    udp_policy_status,
     TRANSPARENT_PORT,
 )
 from modules.arp_spoof import ARPSpoofer, _get_local_ip, _get_mac, _get_hostname
@@ -111,6 +118,7 @@ async def shutdown_mitm():
     _dhcp_started_ts = None
     dhcp_block_clear()
     quic_block_clear()
+    udp_policy_clear()
     if _dns_spoofer:
         await _dns_spoofer.stop()
         _dns_spoofer = None
@@ -187,6 +195,11 @@ class MITMStartRequest(BaseModel):
                 "omit it to start an unscoped AP"
             )
         return validate_mac_list(value)
+
+    # QUIC handling for the targets: "drop" (default) kills their UDP/443 so
+    # browsers fall back to interceptable TCP/TLS; "allow" lets QUIC pass
+    # through untouched (visible only in the passive network layer).
+    quic_mode: str = "drop"
 
 
 class MITMStartResponse(BaseModel):
@@ -723,7 +736,7 @@ async def _mitm_start_locked(req: MITMStartRequest):
     spoof_desc: list[str] = []
     # QUIC/HTTP3 block: drop the targets' UDP/443 so QUIC-capable clients
     # fall back to interceptable TCP/TLS instead of bypassing the proxy.
-    quic_block_set_targets(set(req.target_ips))
+    quic_block_set_targets(set(req.target_ips), mode=req.quic_mode)
     if _dhcp_spoofer is not None:
         spoof_desc.append(f"DHCP spoofing (Nyx as gateway {local_ip}) <- {target_v4 or '(no IPv4 targets)'}")
         # Audit trail
@@ -767,6 +780,12 @@ async def _mitm_start_locked(req: MITMStartRequest):
     # was intercepted since the start (the MITM session accumulates forever).
     _mitm_session_started_ts = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    # Target-scoped packet feed (MITM page "Packets" view). Auto-started with
+    # the session, auto-stopped with it; failure here NEVER fails the MITM —
+    # the feed is a passive view and its status carries the error instead.
+    from modules.network.mitm_feed import start_feed
+    await start_feed(set(req.target_ips), gateway_ip=req.gateway_ip)
+
     return MITMStartResponse(
         status="ok",
         message=(
@@ -803,6 +822,8 @@ async def mitm_stop():
         _dhcp_fallback_task = None
     _dhcp_started_ts = None
     dhcp_block_clear()
+    quic_block_clear()
+    udp_policy_clear()
 
     if _dns_spoofer:
         await _dns_spoofer.stop()
@@ -836,6 +857,14 @@ async def mitm_stop():
         stop_transparent_transport()
         _engine.transport_ready = False
 
+    # Stop the target-scoped packet feed started by mitm_start (keeps the
+    # UI's packet view lifecycle in lockstep with the interception session).
+    from modules.network.mitm_feed import stop_feed
+    try:
+        await stop_feed()
+    except Exception as e:
+        logger.warning("MITM packet feed stop failed: %s", e)
+
     # NOTE: the Windows Firewall rule for the proxy port is intentionally NOT
     # removed here. It stays open for the whole backend lifetime so devices
     # configured with a manual proxy (Stealth Mode) can still reach Nyx after
@@ -863,6 +892,62 @@ def _activity_for_targets(engine) -> list[dict]:
     return activity_for_targets(engine, _spoofer, _ndp_spoofer, _dhcp_spoofer)
 
 
+# ── QUIC + UDP policy control (the WinDivert layer) ──────────────────────────
+
+
+class QuicModeRequest(BaseModel):
+    mode: str  # "drop" (force TCP fallback) | "allow" (QUIC passes through)
+
+
+class UdpRuleRequest(BaseModel):
+    target: str
+    dst_port: int | None = None
+    action: str = "drop"  # "drop" | "pass"
+
+
+@router.get("/quic")
+async def get_quic_status():
+    """Current QUIC handling: mode, tracked targets, dropped-packet count."""
+    return quic_block_status()
+
+
+@router.post("/quic")
+async def set_quic_mode(req: QuicModeRequest):
+    try:
+        quic_block_set_mode(req.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return quic_block_status()
+
+
+@router.get("/udp")
+async def get_udp_policy():
+    """WinDivert UDP drop/pass rules for forwarded target traffic."""
+    return udp_policy_status()
+
+
+@router.delete("/udp/rules/{index}")
+async def remove_udp_rule(index: int):
+    if not udp_policy_remove(index):
+        raise HTTPException(status_code=404, detail=f"No UDP rule at index {index}")
+    return udp_policy_status()
+
+
+@router.post("/udp/rules")
+async def add_udp_rule(req: UdpRuleRequest):
+    try:
+        udp_policy_add(req.target, req.dst_port, req.action)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return udp_policy_status()
+
+
+@router.post("/udp/clear")
+async def clear_udp_policy():
+    udp_policy_clear()
+    return udp_policy_status()
+
+
 @router.get("/status")
 async def mitm_status():
     """Everything the MITM page polls about the current session."""
@@ -885,8 +970,52 @@ async def mitm_status():
     )
 
 
+def _packet_feed_status() -> dict:
+    """Feed status for the /status payload — never raises."""
+    try:
+        from modules.network.mitm_feed import feed_status
+        return feed_status()
+    except Exception:
+        return {"running": False, "interface": None, "targets": [], "packets_buffered": 0, "error": None, "started_ts": None}
+
+
 class TLSSetting(BaseModel):
     active: bool
+
+
+@router.get("/packets")
+async def mitm_packets(limit: int = 120):
+    """Recent packets scoped to the intercepted targets (feed's BPF already
+    restricts capture to target endpoints + DHCP handshake frames)."""
+    try:
+        from modules.network.mitm_feed import recent_packets
+        return recent_packets(limit)
+    except Exception:
+        return []
+
+
+@router.get("/packets/{seq}")
+async def mitm_packet_detail(seq: int):
+    """Wireshark-style dissection of one feed packet (layer tree + hexdump).
+
+    Same payload shape as GET /api/network/packets/{seq} — the UI renders the
+    identical modal. 404 when the feed is off or the seq left the bounded
+    buffer (400 packets).
+    """
+    try:
+        from modules.network.mitm_feed import feed_engine
+
+        engine = feed_engine()
+        if engine is None:
+            raise HTTPException(status_code=404, detail="Packet feed not running")
+        detail = engine.get_packet_detail(seq)
+        if detail is None:
+            raise HTTPException(status_code=404, detail=f"Packet {seq} not in buffer")
+        return detail
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="Packet feed not running")
 
 
 @router.post("/tls")
