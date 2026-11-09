@@ -27,6 +27,7 @@ class MqttInjectionCheck(BaseCheck):
                                         evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                         remediation="Sanitize all input used in MQTT topic filters. Avoid concatenating user input into topic strings.",
                                         cwe="CWE-77",
+                                        param=param,
                                     ))
                                     break
                     except Exception:

@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
+from api.deps import ensure_authorized
+from core.authorization import authorize
 from modules.pipeline.orchestrator import ScanPipeline
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
@@ -8,22 +10,33 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 class StartPipelineRequest(BaseModel):
     target_url: str
-    session_id: str | None = None
+    # Required: the pipeline crawls, fuzzes and actively scans the target.
+    session_id: str
     config: dict = {}
 
 
 def get_pipeline(request: Request) -> ScanPipeline:
     if not hasattr(request.app.state, 'pipeline_service'):
-        request.app.state.pipeline_service = ScanPipeline(request.app.state.event_bus)
+        # Without the lifespan-provided event bus there is nothing to run a
+        # pipeline on; answer 503 instead of raising AttributeError (a bare
+        # 500 that hides the real cause from the UI and from tests).
+        event_bus = getattr(request.app.state, 'event_bus', None)
+        if event_bus is None:
+            raise HTTPException(503, detail="Pipeline service not available")
+        request.app.state.pipeline_service = ScanPipeline(event_bus)
     return request.app.state.pipeline_service
 
 
 @router.post("/start")
 async def start_pipeline(body: StartPipelineRequest, request: Request):
+    decision = await authorize(
+        body.session_id, body.target_url, require_session=True
+    )
+    ensure_authorized(*decision)
     pipeline = get_pipeline(request)
     result = await pipeline.start_pipeline(
         target_url=body.target_url,
-        session_id=body.session_id or "",
+        session_id=body.session_id,
         config=body.config,
     )
     return result

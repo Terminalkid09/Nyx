@@ -1,6 +1,6 @@
 import copy
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class MemcachedInjectionCheck(BaseCheck):
@@ -8,10 +8,14 @@ class MemcachedInjectionCheck(BaseCheck):
 
     async def run(self, base_request: dict, target_params: list[str]) -> list[CheckResult]:
         results = []
-        payloads = ["\r\nset injected_key 0 0 5\r\nhello\r\n", "\r\nget injected_key\r\n", "\r\ndelete injected_key\r\n"]
+        payloads = [
+            "\r\nset injected_key 0 0 5\r\nhello\r\n", "\r\nget injected_key\r\n",
+            "\r\ndelete injected_key\r\n", "%0d%0Aset injected_key 0 0 5%0d%0avalue",
+            "%0aget injected_key",
+        ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload in payloads:
+                for payload in cap_payloads(payloads):
                     modified = self._inject_payload(base_request, param, payload)
                     try:
                         resp = await client.request(**modified)
@@ -27,6 +31,7 @@ class MemcachedInjectionCheck(BaseCheck):
                                         evidence=f"Payload: {payload[:50]}...\nIndicator: {ind}",
                                         remediation="Sanitize input before using in Memcached commands. Use parameterised access patterns.",
                                         cwe="CWE-77",
+                                        param=param,
                                     ))
                                     break
                     except Exception:

@@ -135,18 +135,6 @@ export interface DiffResult {
   sections: { type: string; lines: string[] }[]
 }
 
-export interface Plugin {
-  id: string
-  name: string
-  path: string
-  enabled: boolean
-  hook_type: string
-  description: string | null
-  version: string
-  config: Record<string, unknown>
-  created_at: string
-}
-
 export interface Project {
   id: string
   name: string

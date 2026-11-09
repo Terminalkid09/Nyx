@@ -73,6 +73,42 @@ export interface GdprReport {
   articles: GdprArticle[]
 }
 
+export type MeasureStatus = 'PASS' | 'FAIL' | 'NOT_ASSESSED'
+
+export interface Measure {
+  title: string
+  status: MeasureStatus
+  violations: any[]
+  violation_count: number
+}
+
+export interface Nis2Measure extends Measure {
+  measure_id: string
+}
+
+export interface IsoControl extends Measure {
+  control_id: string
+}
+
+interface MeasureReport<T> {
+  report_id: string
+  generated_at: string
+  framework: string
+  scope: { basis: string; caveat: string }
+  summary: {
+    total: number
+    passed: number
+    failed: number
+    not_assessed: number
+    total_violations: number
+  }
+  measures?: T[]
+  controls?: T[]
+}
+
+export type Nis2Report = MeasureReport<Nis2Measure> & { measures: Nis2Measure[] }
+export type Iso27001Report = MeasureReport<IsoControl> & { controls: IsoControl[] }
+
 export interface ComplianceStatus {
   total_findings: number
   owasp_categories_with_findings: number
@@ -94,6 +130,16 @@ export async function getPciDssReport(): Promise<PciDssReport> {
 
 export async function getGdprReport(): Promise<GdprReport> {
   const { data } = await apiClient.get('/api/compliance/gdpr')
+  return data
+}
+
+export async function getNis2Report(): Promise<Nis2Report> {
+  const { data } = await apiClient.get('/api/compliance/nis2')
+  return data
+}
+
+export async function getIso27001Report(): Promise<Iso27001Report> {
+  const { data } = await apiClient.get('/api/compliance/iso27001')
   return data
 }
 

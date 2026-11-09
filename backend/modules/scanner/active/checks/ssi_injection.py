@@ -1,7 +1,7 @@
 import copy
 import re
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class SsiInjectionCheck(BaseCheck):
@@ -19,7 +19,7 @@ class SsiInjectionCheck(BaseCheck):
         ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload in payloads:
+                for payload in cap_payloads(payloads):
                     modified = self._inject_payload(base_request, param, payload)
                     try:
                         resp = await client.request(**modified)
@@ -34,6 +34,7 @@ class SsiInjectionCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nIndicator: {indicator}",
                                     remediation="Disable SSI (mod_include) if not required. If needed, restrict #exec directive.",
                                     cwe="CWE-97",
+                                    param=param,
                                 ))
                                 break
                     except Exception:

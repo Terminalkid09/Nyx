@@ -26,7 +26,6 @@ const tabs = [
   { to: '/scan-jobs', label: 'Scan Jobs' },
   { to: '/automation', label: 'AutoScan' },
   { to: '/auto-exploit', label: 'Auto Exploit' },
-  { to: '/plugins', label: 'Plugins' },
   { to: '/triage', label: 'Triage' },
   { to: '/ws-messages', label: 'WS MSG' },
   { to: '/automations', label: 'Automations' },

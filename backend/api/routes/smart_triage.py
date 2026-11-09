@@ -1,30 +1,161 @@
+import shlex
 import uuid
 from datetime import datetime, timezone, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from api.deps import get_db
+from core.authorization import authorize
 from core.storage.models import Finding, Request
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
+
+TriageStatus = Literal["open", "confirmed", "needs_review", "fixed", "false_positive"]
+SEVERITIES = ("critical", "high", "medium", "low", "info")
+# Dismissed and fixed findings are history: they stay in the database (the
+# evidence is still useful) but out of the working list by default.
+CLOSED_STATUSES = ("false_positive", "fixed")
+
+
+def _effective_severity(f: Finding) -> str:
+    """Operator override wins over what the scanner decided."""
+    if f.severity_override in SEVERITIES:
+        return f.severity_override
+    return f.severity.value if hasattr(f.severity, "value") else str(f.severity)
+
+
+class FindingUpdate(BaseModel):
+    triage_status: TriageStatus | None = None
+    # ``None`` clears the override, a severity sets it.
+    severity: Literal["critical", "high", "medium", "low", "info"] | None = None
+    clear_severity_override: bool = False
+
+
+def _request_from_evidence(finding: Finding) -> dict | None:
+    """Recover a replayable request from the stored evidence.
+
+    Every scanner finding carries a ``Reproduce:\ncurl -i -X GET '<url>'`` block
+    (see ``core/storage/evidence.py``). Older findings, and findings whose
+    captured request was removed by the retention janitor, no longer have a
+    Request row, and retest used to answer a generic 400 for them.
+    """
+    evidence = finding.evidence
+    if not isinstance(evidence, str) or "curl " not in evidence:
+        return None
+
+    for line in evidence.splitlines():
+        line = line.strip()
+        if not line.startswith("curl "):
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+
+        method, url = "GET", None
+        headers: dict[str, str] = {}
+        body = None
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            nxt = tokens[index + 1] if index + 1 < len(tokens) else None
+            if token in ("-X", "--request") and nxt:
+                method = nxt.upper()
+                index += 2
+                continue
+            if token in ("-H", "--header") and nxt:
+                key, _, value = nxt.partition(":")
+                headers[key.strip()] = value.strip()
+                index += 2
+                continue
+            if token in ("--data-raw", "--data", "-d") and nxt:
+                body = nxt
+                index += 2
+                continue
+            if url is None and token.startswith(("http://", "https://")):
+                url = token
+            index += 1
+
+        if not url:
+            continue
+        # Evidence is scrubbed before being stored, so a placeholder is not a
+        # credential the user wants replayed.
+        headers = {k: v for k, v in headers.items() if v != "[REDACTED]"}
+        return {
+            "method": method,
+            "url": url,
+            "headers": headers,
+            "body": body,
+            "response_status": None,
+        }
+    return None
+
+
+async def _resolve_retest_request(db: AsyncSession, finding: Finding) -> dict | None:
+    """Return the request to replay, or None when the finding cannot be re-sent."""
+    req = None
+    if finding.request_id is not None:
+        req = await db.get(Request, finding.request_id)
+    if req is not None and req.url:
+        return {
+            "method": (req.method or "GET").upper(),
+            "url": req.url,
+            "headers": dict(req.request_headers or {}),
+            "body": req.request_body,
+            "response_status": req.response_status,
+        }
+    return _request_from_evidence(finding)
+
+
+async def authorize_finding_target(
+    finding_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Retest re-sends a real request, so it must honour scope and RoE.
+
+    Without this the operator could probe a target the engagement no longer
+    covers just by pressing retest on an old finding. A finding with nothing
+    replayable is not an authorization problem: the handler answers
+    "not_retestable" instead of the old generic 400.
+    """
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(404, detail="Finding not found")
+
+    target = await _resolve_retest_request(db, finding)
+    if target is None:
+        return
+
+    allowed, kind, detail = await authorize(
+        finding.session_id, target["url"], require_session=True
+    )
+    if not allowed:
+        raise HTTPException(403, detail=f"Target not authorized ({kind}: {detail})")
 
 
 @router.get("/findings/grouped")
 async def get_grouped_findings(
     session_id: uuid.UUID = Query(..., description="Session to scope findings to"),
+    include_triaged: bool = Query(False, description="Also return dismissed/fixed findings"),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
+    query = (
         select(Finding)
         .where(Finding.session_id == session_id)
         .options(selectinload(Finding.request))
         .order_by(Finding.created_at.desc())
     )
+    if not include_triaged:
+        query = query.where(Finding.triage_status.notin_(CLOSED_STATUSES))
+    result = await db.execute(query)
     findings = result.scalars().all()
 
+    severity_order = {sev: index for index, sev in enumerate(SEVERITIES)}
     groups: dict[str, dict] = {}
     for f in findings:
         path = f.request.path if f.request else "/unknown"
@@ -33,7 +164,10 @@ async def get_grouped_findings(
             groups[key] = {
                 "key": key,
                 "title": f.title,
-                "severity": f.severity.value,
+                "severity": _effective_severity(f),
+                "severity_override": f.severity_override,
+                "triage_status": f.triage_status,
+                "finding_ids": [],
                 "count": 0,
                 "endpoint": path,
                 "host": (f.request.host or "") if f.request else "",
@@ -50,6 +184,13 @@ async def get_grouped_findings(
             }
         g = groups[key]
         g["count"] += 1
+        g["finding_ids"].append(str(f.id))
+        # A group inherits the worst effective severity of its members, so an
+        # override on one instance cannot hide the others.
+        if severity_order.get(_effective_severity(f), 99) < severity_order.get(g["severity"], 99):
+            g["severity"] = _effective_severity(f)
+        if f.severity_override and not g["severity_override"]:
+            g["severity_override"] = f.severity_override
         if f.request and f.request.request_body and not g["request_body"]:
             g["request_body"] = f.request.request_body
             g["method"] = f.request.method or g["method"]
@@ -63,38 +204,89 @@ async def get_grouped_findings(
         if seen > g["last_seen"]:
             g["last_seen"] = seen
 
-    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     sorted_groups = sorted(groups.values(), key=lambda g: severity_order.get(g["severity"], 99))
     return {"groups": sorted_groups}
 
 
-@router.get("/findings/{finding_id}/retest")
-async def retest_finding(finding_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+@router.patch("/findings/{finding_id}")
+async def update_finding(
+    finding_id: uuid.UUID,
+    body: FindingUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record a triage decision (dismiss, confirm, re-rate) without losing it."""
     finding = await db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(404, detail="Finding not found")
 
-    req = await db.get(Request, finding.request_id)
-    if not req:
-        raise HTTPException(400, detail="Associated request not found")
+    if body.clear_severity_override:
+        finding.severity_override = None
+    elif body.severity is not None:
+        finding.severity_override = body.severity
+    if body.triage_status is not None:
+        finding.triage_status = body.triage_status
+
+    await db.commit()
+    await db.refresh(finding)
+    return {
+        "id": str(finding.id),
+        "triage_status": finding.triage_status,
+        "severity": _effective_severity(finding),
+        "severity_override": finding.severity_override,
+    }
+
+
+@router.get("/findings/{finding_id}/retest")
+async def retest_finding(
+    finding_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _authorized: None = Depends(authorize_finding_target),
+):
+    finding = await db.get(Finding, finding_id)
+    if not finding:
+        raise HTTPException(404, detail="Finding not found")
+
+    target = await _resolve_retest_request(db, finding)
+    if target is None:
+        # Nothing to replay. Say so explicitly: a 400 here read like a broken
+        # link, while the finding is simply not reproducible by a re-send.
+        return {
+            "result": "not_retestable",
+            "evidence": (
+                "No replayable request is stored for this finding. Open the "
+                "endpoint from the Proxy history or Repeater to re-test it."
+            ),
+            "triage_status": finding.triage_status,
+        }
 
     import httpx
     try:
         async with httpx.AsyncClient() as client:
-            method = req.method.lower()
-            headers = dict(req.request_headers or {})
-            body = req.request_body
-            resp = await client.request(method, req.url, headers=headers, content=body, timeout=10, follow_redirects=False)
-            evidence = f"Re-ran {req.method} {req.url} -> {resp.status_code} ({len(resp.content)} bytes)"
+            method = target["method"].lower()
+            headers = target["headers"]
+            body = target["body"]
+            resp = await client.request(method, target["url"], headers=headers, content=body, timeout=10, follow_redirects=False)
+            evidence = f"Re-ran {target['method']} {target['url']} -> {resp.status_code} ({len(resp.content)} bytes)"
 
-            is_fixed = resp.status_code != req.response_status if req.response_status else False
-            result = "confirmed"
-            if is_fixed:
-                result = "fixed"
+            # A different status is a signal, not proof: a WAF, a rate limit or
+            # a rotated token also change it. Only a response that still looks
+            # like the original confirms the finding; anything else goes back
+            # to the operator instead of being marked "fixed" on a guess.
+            if target["response_status"] and resp.status_code == target["response_status"]:
+                result = "confirmed"
+            else:
+                result = "needs_review"
+            finding.triage_status = result
+            await db.commit()
 
-            return {"result": result, "evidence": evidence, "status_code": resp.status_code}
+            return {
+                "result": result,
+                "evidence": evidence,
+                "status_code": resp.status_code,
+                "triage_status": finding.triage_status,
+            }
     except Exception as e:
-        return {"result": "error", "evidence": str(e)}
+        return {"result": "error", "evidence": str(e), "triage_status": finding.triage_status}
 
 
 @router.get("/stats")
@@ -195,7 +387,8 @@ async def get_recent_findings(
         {
             "id": str(f.id),
             "title": f.title,
-            "severity": f.severity.value,
+            "severity": _effective_severity(f),
+            "triage_status": f.triage_status,
             "method": f.request.method if f.request else "",
             "url": f.request.url if f.request else "",
             "status": f.request.response_status if f.request else None,

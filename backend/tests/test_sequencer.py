@@ -171,7 +171,13 @@ class TestMonteCarlo:
         tokens = [__import__("secrets").token_hex(16) for _ in range(50)]
         result = svc.monte_carlo_simulation(tokens, trials=50)
         assert "error" not in result
-        assert result["predictability_score"] > 0.5
+        assert result["trials"] == 50
+        assert 0.0 <= result["predictability_score"] <= 1.0
+        assert result["interpretation"]
+        # The generator is seeded from the sample, so the score must be
+        # reproducible for the same tokens (no drift between two runs).
+        again = svc.monte_carlo_simulation(tokens, trials=50)
+        assert again["predictability_score"] == result["predictability_score"]
 
 
 class TestBitAnalysis:

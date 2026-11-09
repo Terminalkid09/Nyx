@@ -17,7 +17,9 @@ class XxeSoapCheck(BaseCheck):
             (r"<!ENTITY\s+\w+\s+SYSTEM\s+[\"']http://", "XXE in SOAP: HTTP request"),
             (r"<!ENTITY\s+%\s+\w+\s+SYSTEM", "Parameter entity in SOAP XML"),
             (r"<!DOCTYPE\s+\w+\s+SYSTEM\s+[\"']http", "SOAP DOCTYPE with external DTD"),
-            (r"<soap:Body[^>]*><![CDATA[.*<!ENTITY", "SOAP body with entity definition"),
+            # `<!` before CDATA is literal text: `[` must be escaped or re
+            # reads it as the start of a character set.
+            (r"<soap:Body[^>]*><!\[CDATA\[.*<!ENTITY", "SOAP body with entity definition"),
             (r"<!DOCTYPE\s+soap\s+\[", "DOCTYPE soap with internal entity"),
         ]
         for pattern, desc in patterns:

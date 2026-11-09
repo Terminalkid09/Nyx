@@ -564,9 +564,17 @@ class SequencerService:
     # --------------------------------------------------------------------------
 
     def monte_carlo_simulation(self, tokens: list[str], trials: int = 1000) -> dict:
+        """Estimate how predictable the sample looks under a resampled model.
+
+        The generator is seeded from the sample itself, so the same tokens
+        always produce the same score. A report that changes on every refresh
+        is not an observation, and the previous module-level ``random`` made
+        the result vary run to run (which is what made the CI assertion flaky).
+        """
         if not tokens or len(tokens) < 10:
             return {"error": "Need at least 10 tokens for Monte Carlo simulation."}
 
+        import hashlib
         import random
         numeric = [sum(ord(c) for c in t) for t in tokens]
         sample = numeric[:200]
@@ -574,12 +582,18 @@ class SequencerService:
         if n < 2:
             return {"error": "Insufficient samples."}
 
+        seed_text = "|".join(tokens[:200])
+        seed = int(
+            hashlib.sha256(seed_text.encode("utf-8", "ignore")).hexdigest()[:16], 16
+        )
+        rng = random.Random(seed)
+
         mean = sum(sample) / n
         std = (sum((x - mean) ** 2 for x in sample) / n) ** 0.5 or 1
 
         matches = 0
         for _ in range(trials):
-            simulated = [random.gauss(mean, std) for _ in range(n)]
+            simulated = [rng.gauss(mean, std) for _ in range(n)]
             sim_mean = sum(simulated) / n
             sim_std = (sum((x - sim_mean) ** 2 for x in simulated) / n) ** 0.5 or 1
             if abs(sim_mean - mean) / std < 0.1 and abs(sim_std - std) / std < 0.1:

@@ -68,6 +68,7 @@ class HppCheck(BaseCheck):
                                     remediation="Use the last or first occurrence of duplicate parameters consistently. "
                                                 "Validate and reject requests with duplicate parameters.",
                                     cwe="CWE-235",
+                                    param=param,
                                 ))
                     except Exception:
                         continue

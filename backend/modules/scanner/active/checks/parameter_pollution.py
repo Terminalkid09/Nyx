@@ -54,6 +54,7 @@ class ParameterPollutionCheck(BaseCheck):
                                     remediation="Use only the first or last occurrence consistently. "
                                                 "Reject requests with duplicate parameter names.",
                                     cwe="CWE-235",
+                                    param=param,
                                 ))
                     except Exception:
                         continue
@@ -99,6 +100,7 @@ class ParameterPollutionCheck(BaseCheck):
                                     remediation="Use a consistent location for each parameter. "
                                                 "Reject requests with the same parameter in multiple locations.",
                                     cwe="CWE-235",
+                                    param=param,
                                 ))
                         except Exception:
                             continue

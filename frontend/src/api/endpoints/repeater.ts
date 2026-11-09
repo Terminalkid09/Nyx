@@ -30,13 +30,15 @@ export async function sendRequest(
   method: string,
   url: string,
   headers?: Record<string, string>,
-  body?: string
+  body?: string,
+  sessionId?: string,
 ): Promise<RepeaterResponse> {
   const { data } = await apiClient.post<RepeaterResponse>('/api/repeater/send', {
     method,
     url,
     headers: headers || {},
     body: body || null,
+    session_id: sessionId,
   })
   return data
 }

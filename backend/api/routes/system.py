@@ -3,6 +3,7 @@
 These were extracted from main.py to keep that file under 400 lines.
 All heavy logic stays in core/ — this module just wires HTTP endpoints.
 """
+import asyncio
 import logging
 import qrcode
 from io import BytesIO
@@ -18,6 +19,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from core.config import settings
+from core.version import VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,11 @@ def _get_frontend_dist() -> Path:
     return Path(__file__).parent.parent.parent / "frontend" / "dist"
 
 
-def _get_ca_base_url() -> str:
-    from modules.ca_portal import DEFAULT_PORT
+def _get_ca_base_url(mgr=None) -> str:
+    from modules.ca_portal import active_port
+    # The portal walks up from 18081 when that port is busy; the QR must encode
+    # the port it actually bound, not the default.
+    port = getattr(mgr, "lan_port", None) or active_port()
     host = settings.API_HOST
     if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0", ""):
         from modules.arp_spoof import _get_local_ip
@@ -45,7 +50,7 @@ def _get_ca_base_url() -> str:
             host = _get_local_ip()
         except Exception:
             host = "127.0.0.1"
-    return f"http://{host}:{DEFAULT_PORT}"
+    return f"http://{host}:{port}"
 
 
 def _get_ca_portal(app_state):
@@ -243,7 +248,7 @@ async def health(request: Request):
     return {
         "status": "ok" if (db_ok and proxy_ok) else "degraded",
         "app": "Nyx",
-        "version": "1.0.0",
+        "version": VERSION,
         "uptime_sec": int(_time.time() - start_time),
         "database": {"ok": db_ok, "error": db_error},
         "proxy": {
@@ -286,9 +291,10 @@ async def get_api_key(request: Request):
 
 @router.get("/api/ca-qr")
 async def ca_qr(request: Request):
-    if _get_ca_portal(request.app.state) is None:
+    portal = _get_ca_portal(request.app.state)
+    if portal is None:
         return {"error": "CA certificate not found"}
-    img = qrcode.make(f"{_get_ca_base_url()}/")
+    img = qrcode.make(f"{_get_ca_base_url(portal)}/")
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -310,20 +316,45 @@ async def ca_uninstall_page():
 
 @router.get("/api/ca-uninstall-qr")
 async def ca_uninstall_qr(request: Request):
-    if _get_ca_portal(request.app.state) is None:
+    portal = _get_ca_portal(request.app.state)
+    if portal is None:
         return {"error": "CA certificate not found"}
-    img = qrcode.make(f"{_get_ca_base_url()}/api/ca-uninstall")
+    img = qrcode.make(f"{_get_ca_base_url(portal)}/api/ca-uninstall")
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="image/png")
 
 
+@router.get("/api/ca/status")
+async def ca_status():
+    """Where the Nyx CA is trusted on THIS machine (targets are separate).
+
+    Installing the CA on the operator PC is optional: it only matters when the
+    operator browses through Nyx themselves. Target devices install it from the
+    LAN portal (``/api/ca-certificate`` served on the portal port).
+    """
+    from core.proxy.engine import ca_trust_state
+
+    state = await asyncio.to_thread(ca_trust_state)
+    ca_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+    state["certificate"] = str(ca_path) if ca_path.exists() else None
+    return state
+
+
 @router.post("/api/ca/remove")
 async def remove_ca():
-    from core.proxy.engine import remove_ca_from_trust_store
-    ok, msg = remove_ca_from_trust_store()
-    return {"status": "ok" if ok else "error", "message": msg}
+    """Remove the CA from this machine and REPORT what a re-check found.
+
+    Runs off the event loop (the store query shells out) and returns the
+    per-store counts before/after, so "removed" means verified — not just
+    "the delete command exited 0".
+    """
+    from core.proxy.engine import remove_ca_verified
+
+    outcome = await asyncio.to_thread(remove_ca_verified)
+    outcome["status"] = "ok" if outcome.get("removed") else "error"
+    return outcome
 
 
 # ── MITM Portal ─────────────────────────────────────────────────────────────

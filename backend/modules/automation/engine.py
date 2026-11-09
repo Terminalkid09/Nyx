@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import re
+import uuid
 from collections import defaultdict
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urljoin
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,12 @@ class AutoScanEngine:
         self.scan_delay_ms = 500
         # Even when enabled, never scan more than this many params per URL.
         self.max_params_per_scan = 12
+        # Both default OFF/ON respectively; Live Audit flips them through its
+        # toggles. They used to exist only in the UI and were never read.
+        self.auto_param_discovery = False
+        self.enforce_scope = True
+        self._param_discovery_inflight: set[str] = set()
+        self._param_discovery_sem = asyncio.Semaphore(1)
 
         self._learning_mode = True
         self._learning_domains: set[str] = set()
@@ -69,6 +76,9 @@ class AutoScanEngine:
         if new_params and self.auto_active_scan:
             self._enqueue_scan(url, new_params, event)
 
+        if self.auto_param_discovery and not parse_qs(urlparse(url).query):
+            self._schedule_param_discovery(url, event)
+
         extracted = self._extract_urls_from_request(event)
         for u in extracted:
             self._add_discovered(u, 'request_extracted', event)
@@ -88,7 +98,35 @@ class AutoScanEngine:
         if redirect_url:
             self._add_discovered(redirect_url, 'redirect', event)
 
+    @staticmethod
+    def _absolute_url(url: str, event: dict) -> str | None:
+        """Resolve a discovered link against the request that carried it.
+
+        Response bodies are full of relative links (``href="/admin"``). They
+        used to be stored verbatim, producing entries with ``host=''`` that the
+        scope check rejected and no scan could ever reach (BUG-13).
+        """
+        if not url:
+            return None
+        base = event.get("url") or ""
+        if url.startswith(("http://", "https://")):
+            resolved = url
+        elif url.startswith("//"):
+            scheme = urlparse(base).scheme or "https"
+            resolved = f"{scheme}:{url}"
+        elif base:
+            resolved = urljoin(base, url)
+        else:
+            return None
+        parsed = urlparse(resolved)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        return resolved
+
     def _add_discovered(self, url: str, source: str, event: dict):
+        url = self._absolute_url(url, event)
+        if not url:
+            return
         if url not in self.discovered_urls:
             self.discovered_urls[url] = {
                 'url': url,
@@ -97,9 +135,13 @@ class AutoScanEngine:
                 'host': urlparse(url).hostname or '',
             }
             try:
-                asyncio.create_task(self._publish_url_discovered(url, source))
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                pass
+                # No event loop (unit tests, sync context): record the URL but
+                # skip the broadcast. Calling create_task here would build a
+                # coroutine that is never awaited.
+                return
+            loop.create_task(self._publish_url_discovered(url, source))
 
     async def _publish_url_discovered(self, url: str, source: str):
         await self.event_bus.publish({
@@ -163,6 +205,11 @@ class AutoScanEngine:
         priority = 2 if API_PATTERNS.search(url) else 1
         self.pending_queue.append({
             'url': url,
+            # Carry the originating session/request so findings from the queue
+            # land in the session the user is looking at. Without these,
+            # persist_results() fell back to DEFAULT_SESSION_ID (BUG-16).
+            'session_id': event.get('session_id'),
+            'request_id': event.get('request_id'),
             # Cap the param set: scanning hundreds of params per URL (video
             # stream URLs with 17+ params were common) multiplies the request
             # count by 148 checks each — the resource bomb that froze the app.
@@ -192,9 +239,64 @@ class AutoScanEngine:
         if tasks:
             await asyncio.gather(*tasks)
 
+    def _schedule_param_discovery(self, url: str, event: dict) -> None:
+        """Probe a parameter-less URL for hidden params, at most once at a time."""
+        if url in self._param_discovery_inflight:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._param_discovery_inflight.add(url)
+        loop.create_task(self._discover_params(url, event))
+
+    async def _discover_params(self, url: str, event: dict) -> None:
+        try:
+            async with self._param_discovery_sem:
+                discovered = await self.active_scanner.discover_params(url) or []
+            names = []
+            for entry in discovered:
+                name = entry.get("name") if isinstance(entry, dict) else str(entry)
+                if name and name not in names:
+                    names.append(name)
+            await self.event_bus.publish({
+                "type": "automation.params_discovered",
+                "url": url,
+                "params": names,
+                "session_id": event.get("session_id"),
+            })
+            if names and self.auto_active_scan:
+                self._enqueue_scan(url, names, event)
+        except Exception as exc:
+            logger.warning("Param discovery failed for %s: %s", url, exc)
+        finally:
+            self._param_discovery_inflight.discard(url)
+
     async def _scan_url(self, item: dict):
         url = item['url']
         params = item['params']
+
+        # Scope is a barrier, not a UI filter: never probe a host the session
+        # owner did not authorize. No rules configured means "allow", matching
+        # the pre-existing behaviour of check_scope().
+        if self.enforce_scope:
+            try:
+                session_uuid = uuid.UUID(str(item['session_id'])) if item.get('session_id') else None
+            except (TypeError, ValueError):
+                session_uuid = None
+            from core.authorization import authorize
+            allowed, kind, detail = await authorize(session_uuid, url)
+            if not allowed:
+                logger.info("AutoScan skipped %s (%s: %s)", url, kind, detail)
+                await self.event_bus.publish({
+                    "type": "automation.scan_skipped",
+                    "url": url,
+                    "session_id": item.get('session_id'),
+                    "reason": kind,
+                    "rule": detail,
+                })
+                return
+
         logger.info("Active scanning %s with params %s", url, params)
 
         await self.event_bus.publish({
@@ -210,16 +312,29 @@ class AutoScanEngine:
             'body': None,
         }
 
+        findings = 0
+        error = None
         try:
             # "fast" depth: skips heavy checks (blind/time-based/OAST) and
             # caps payloads — full-depth scans on every captured URL are what
-            # froze the backend (see __init__ note).
+            # froze the backend (see __init__ note). Passing ``item`` as the
+            # event keeps the session attribution (BUG-16).
             results = await self.active_scanner.run_checks(
-                base_request, params, depth="fast"
+                base_request, params, event=item, depth="fast"
             )
-            logger.info("Scan of %s complete: %d findings", url, len(results))
+            findings = len(results or [])
+            logger.info("Scan of %s complete: %d findings", url, findings)
         except Exception as e:
+            error = str(e)
             logger.error("Active scan of %s failed: %s", url, e)
+        finally:
+            await self.event_bus.publish({
+                "type": "automation.scan_completed",
+                "url": url,
+                "session_id": item.get("session_id"),
+                "findings": findings,
+                "error": error,
+            })
 
     async def _learn_from_traffic(self, url: str):
         if not self._learning_mode:
@@ -266,6 +381,8 @@ class AutoScanEngine:
     def get_config(self) -> dict:
         return {
             'auto_active_scan': self.auto_active_scan,
+            'auto_param_discovery': self.auto_param_discovery,
+            'enforce_scope': self.enforce_scope,
             'max_concurrent': self.max_concurrent_active_scans,
             'scan_delay_ms': self.scan_delay_ms,
         }
@@ -273,6 +390,10 @@ class AutoScanEngine:
     def update_config(self, config: dict):
         if 'auto_active_scan' in config:
             self.auto_active_scan = bool(config['auto_active_scan'])
+        if 'auto_param_discovery' in config:
+            self.auto_param_discovery = bool(config['auto_param_discovery'])
+        if 'enforce_scope' in config:
+            self.enforce_scope = bool(config['enforce_scope'])
         if 'max_concurrent' in config:
             self.max_concurrent_active_scans = int(config['max_concurrent'])
         if 'scan_delay_ms' in config:

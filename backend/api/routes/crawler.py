@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 from modules.crawler.service import CrawlerService
+from api.deps import ensure_authorized
+from core.authorization import authorize
 from core.events.bus import EventBus
 
 event_bus = EventBus()
@@ -32,6 +34,9 @@ class CrawlStartRequest(BaseModel):
     login_macro: list[LoginMacroStep] = []
     headers: dict[str, str] = {}
     respect_robots_txt: bool = True
+    # Required: the crawler issues requests on its own and must stay inside the
+    # session that authorized the target.
+    session_id: str
 
 
 class CrawlJobResponse(BaseModel):
@@ -84,6 +89,7 @@ def _run_crawl_in_background(job_id: str, body: CrawlStartRequest):
                 headers=body.headers,
                 respect_robots_txt=body.respect_robots_txt,
                 job_id=job_id,
+                session_id=body.session_id,
             )
             _crawl_jobs[job_id] = {
                 "id": job_id,
@@ -113,6 +119,10 @@ def _run_crawl_in_background(job_id: str, body: CrawlStartRequest):
 
 @router.post("/start")
 async def start_crawl(body: CrawlStartRequest):
+    decision = await authorize(
+        body.session_id, body.start_url, require_session=True
+    )
+    ensure_authorized(*decision)
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     _crawl_jobs[job_id] = {

@@ -1,5 +1,5 @@
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 from urllib.parse import urlparse, parse_qsl, urlencode
 
 
@@ -19,7 +19,7 @@ class ActiveLog4shellCheck(BaseCheck):
         results = []
         async with httpx.AsyncClient(verify=False, timeout=15) as client:
             for param in target_params:
-                for payload in LOG4SHELL_PAYLOADS:
+                for payload in cap_payloads(LOG4SHELL_PAYLOADS):
                     modified = dict(base_request)
                     parsed = urlparse(modified["url"])
                     params = dict(parse_qsl(parsed.query))
@@ -36,6 +36,7 @@ class ActiveLog4shellCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Update Log4j to 2.17.0+. Set log4j2.formatMsgNoLookups=true. Apply CVE-2021-44228 patches.",
                                 cwe="CWE-917",
+                                param=param,
                             ))
                     except Exception:
                         continue

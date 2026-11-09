@@ -35,6 +35,7 @@ class ActiveCspBypassCheck(BaseCheck):
                                 evidence=f"Payload: {payload}",
                                 remediation="Review CSP policy. Avoid using unsafe-inline, unsafe-eval. Implement strict-dynamic.",
                                 cwe="CWE-1021",
+                                param=param,
                             ))
                     except Exception:
                         continue

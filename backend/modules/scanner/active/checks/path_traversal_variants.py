@@ -41,6 +41,7 @@ class PathTraversalVariantsCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Validate file paths against an allowlist. Normalize paths before validation.",
                                 cwe="CWE-22",
+                                param=param,
                             ))
                     except Exception:
                         continue

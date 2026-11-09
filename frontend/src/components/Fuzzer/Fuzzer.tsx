@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useProxyStore } from '../../store/useProxyStore'
-import { useSessionStore } from '../../store/useSessionStore'
+import { DEFAULT_SESSION_ID, useSessionStore } from '../../store/useSessionStore'
 import {
   createFuzzJob,
   getFuzzJob,
+  getFuzzJobResults,
   fetchWordlists,
   previewFuzzJob,
   fetchAttackTypes,
@@ -12,6 +13,7 @@ import {
   cancelFuzzJob,
 } from '../../api/endpoints/fuzzer'
 import { FuzzResults } from './FuzzResults'
+import { highlightTemplate } from '../../utils/highlightTemplate'
 
 interface PositionConfig {
   name: string
@@ -36,7 +38,6 @@ import { useFuzzerStore } from '../../store/useFuzzerStore'
 import { useJobsStore } from '../../store/useJobsStore'
 import { ProxyRequestPicker } from '../ProxyRequestPicker/ProxyRequestPicker'
 
-const DEFAULT_SESSION_ID = '00000000-0000-0000-0000-000000000001'
 
 export function Fuzzer() {
   const requests = useProxyStore((s) => s.requests)
@@ -211,8 +212,11 @@ export function Fuzzer() {
       try {
         const job = await getFuzzJob(id)
         setJobStatus(job.status)
-        if (job.results && job.results.length > 0) {
-          setResults(job.results)
+        // Results are rows in their own table now: the job endpoint returns
+        // metadata only, so they have to be fetched alongside it.
+        const rows = await getFuzzJobResults(id)
+        if (rows.length > 0) {
+          setResults(rows)
         }
         if (job.status === 'done' || job.status === 'cancelled') {
           if (pollRef.current) clearInterval(pollRef.current)
@@ -235,9 +239,14 @@ export function Fuzzer() {
       setJobStatus(saved.status || 'running')
       setLoading(true)
       getFuzzJob(saved.id)
-        .then((job) => {
+        .then(async (job) => {
           setJobStatus(job.status)
-          if (job.results && job.results.length > 0) setResults(job.results)
+          if (job.results && job.results.length > 0) {
+            setResults(job.results)
+          } else {
+            const rows = await getFuzzJobResults(saved.id)
+            if (rows.length > 0) setResults(rows)
+          }
           if (job.status === 'done' || job.status === 'cancelled') {
             clearStoredJob('fuzzer')
           } else {
@@ -309,10 +318,7 @@ export function Fuzzer() {
     })
   }
 
-  const highlightedTemplate = template.replace(
-    /§([^§]+)§/g,
-    '<mark class="bg-purple-700 text-purple-200 rounded px-0.5">§$1§</mark>'
-  )
+  const highlightedTemplate = highlightTemplate(template)
 
   return (
     <div className="flex flex-col h-full">

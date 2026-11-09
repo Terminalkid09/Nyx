@@ -20,6 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TMP_DB_DIR = tempfile.mkdtemp(prefix="nyx-test-db-")
 _DB_FILE = (Path(_TMP_DB_DIR) / "nyx-test.db").as_posix()
 os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_DB_FILE}")
+# Importing main.py registers an atexit hook that clears the Windows system
+# proxy / disables IP forwarding. A test run must never reconfigure the host.
+os.environ.setdefault("NYX_SKIP_OS_CLEANUP", "1")
 
 
 @pytest.fixture(scope="session", autouse=True)

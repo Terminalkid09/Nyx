@@ -24,6 +24,12 @@ class ScanPipeline:
         self.event_bus = event_bus
         self._pipelines: dict[str, dict] = {}
 
+    def _active_scanner(self):
+        """Build the scanner with the pipeline bus so findings are persisted."""
+        from modules.scanner.active.scanner import ActiveScanner
+
+        return ActiveScanner(self.event_bus)
+
     async def start_pipeline(
         self,
         target_url: str,
@@ -88,6 +94,7 @@ class ScanPipeline:
                 headers=crawl_config.get("headers", {}),
                 respect_robots_txt=crawl_config.get("respect_robots_txt", True),
                 job_id=pipeline_id + "_crawl",
+                session_id=session_id,
             )
             collected_urls = crawl_result.get("discovered_urls", [])
             collected_forms = crawl_result.get("forms_found", [])
@@ -197,15 +204,19 @@ class ScanPipeline:
             pipeline["steps"]["active_scan"]["status"] = "running"
             await self._publish_progress(pipeline_id)
 
-            from modules.scanner.active.scanner import ActiveScanner
-            active_scanner = ActiveScanner()
+            # Use the pipeline's bus: without it the active step produced
+            # findings that were never persisted or announced.
+            active_scanner = self._active_scanner()
 
             scan_targets = all_urls[:5]
             active_findings = []
             for scan_url in scan_targets:
                 base_req = {"method": "GET", "url": scan_url, "headers": {}, "body": None}
                 try:
-                    findings = await active_scanner.run_checks(base_req, list(extracted_params.keys())[:3])
+                    findings = await active_scanner.run_checks(
+                        base_req, list(extracted_params.keys())[:3],
+                        event={"session_id": pipeline.get("session_id")},
+                    )
                     active_findings.extend(findings)
                 except Exception as e:
                     logger.warning("Active scan of %s failed: %s", scan_url, e)

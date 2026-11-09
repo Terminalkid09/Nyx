@@ -8,6 +8,8 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+SEVERITIES = ("critical", "high", "medium", "low", "info")
+
 
 class ReporterService:
     def __init__(self):
@@ -63,10 +65,22 @@ class ReporterService:
             html = template.render(**context)
             try:
                 from weasyprint import HTML as WeasyprintHTML
-                return WeasyprintHTML(string=html).write_pdf()
             except ImportError:
-                logger.warning("weasyprint not installed, falling back to HTML")
-                return html.encode()
+                # Returning the HTML bytes under an ``application/pdf``
+                # content type produced a .pdf file that no reader could open.
+                # Fail loudly and let the caller pick another format.
+                raise ValueError(
+                    "PDF export requires the optional 'weasyprint' dependency "
+                    "(pip install weasyprint). Use format=html and print to PDF, "
+                    "or install it in the backend environment."
+                )
+            try:
+                return WeasyprintHTML(string=html).write_pdf()
+            except Exception as exc:  # noqa: BLE001 — native libs missing
+                logger.warning("PDF rendering failed: %s", exc)
+                raise ValueError(
+                    f"PDF rendering failed ({exc}). Use format=html instead."
+                )
 
         raise ValueError(f"Unknown format: {format}")
 
@@ -93,7 +107,12 @@ class ReporterService:
         from sqlalchemy import select, func
 
         async with AsyncSessionLocal() as db:
-            findings_query = select(Finding).where(Finding.session_id == session_uuid)
+            # Dismissed findings stay in the database so the evidence survives,
+            # but they must not reappear in the deliverable.
+            findings_query = select(Finding).where(
+                Finding.session_id == session_uuid,
+                Finding.triage_status != "false_positive",
+            )
             findings_query = findings_query.order_by(Finding.severity.desc())
             result = await db.execute(findings_query)
             findings = list(result.scalars().all())
@@ -104,7 +123,15 @@ class ReporterService:
 
         findings_dicts = [
             {
-                "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                # The triage override is the operator's final word: a finding
+                # re-rated to "low" must not come back as "critical" in the
+                # report the client reads.
+                "severity": (
+                    f.severity_override
+                    if f.severity_override in SEVERITIES
+                    else (f.severity.value if hasattr(f.severity, "value") else str(f.severity))
+                ),
+                "triage_status": f.triage_status,
                 "title": f.title,
                 "description": f.description,
                 "evidence": f.evidence,
@@ -152,8 +179,19 @@ class ReporterService:
         return reports
 
     def get_report_content(self, filename: str) -> dict | None:
-        filepath = self.reports_dir / filename
-        if not filepath.exists() or filepath.suffix not in (".json", ".html", ".md"):
+        # ``filename`` comes straight from the URL path. Path('/base') / '/etc/x'
+        # discards the base and '..' escapes it, so containment must be checked
+        # explicitly: reject anything that is not a bare file name, then resolve
+        # and require the result to stay inside reports_dir.
+        if not filename or Path(filename).name != filename:
+            return None
+        base = self.reports_dir.resolve()
+        try:
+            filepath = (base / filename).resolve()
+            filepath.relative_to(base)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if not filepath.is_file() or filepath.suffix not in (".json", ".html", ".md"):
             return None
         try:
             if filepath.suffix == ".json":

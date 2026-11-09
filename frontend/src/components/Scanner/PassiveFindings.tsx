@@ -7,6 +7,7 @@ import { useProxyStore } from '../../store/useProxyStore'
 import { useFuzzerStore } from '../../store/useFuzzerStore'
 import { useAutoExploitStore } from '../../store/useAutoExploitStore'
 import { useSessionStore } from '../../store/useSessionStore'
+import { retestFinding, updateFinding } from '../../api/endpoints/triage'
 import { NyxFinding } from '../../types'
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -26,7 +27,8 @@ export function PassiveFindings() {
   
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const navigate = useNavigate()
-  const [retesting, setRetesting] = useState<Record<string, 'idle' | 'loading' | 'confirmed' | 'fixed' | 'error'>>({})
+  const [retesting, setRetesting] = useState<Record<string, 'idle' | 'loading' | 'confirmed' | 'needs_review' | 'error'>>({})
+  const [dismissed, setDismissed] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     const handleOutsideClick = () => setOpenMenuId(null)
@@ -70,17 +72,33 @@ export function PassiveFindings() {
     }
   }, [requests, navigate])
 
-  const _retest = useCallback(async (findingId: string) => {
+  // Retest re-sends the original request through the backend (which enforces
+  // scope and RoE). The backend records the outcome as triage status, so the
+  // result survives a reload instead of living in this component's state.
+  const retest = useCallback(async (findingId: string) => {
     setRetesting((prev) => ({ ...prev, [findingId]: 'loading' }))
     try {
-      const { data } = await apiClient.get(`/api/triage/findings/${findingId}/retest`)
-      const status: string = data.status || data.result || 'error'
+      const data = await retestFinding(findingId)
       setRetesting((prev) => ({
         ...prev,
-        [findingId]: status === 'confirmed' ? 'confirmed' : status === 'fixed' ? 'fixed' : 'error',
+        [findingId]:
+          data.result === 'confirmed'
+            ? 'confirmed'
+            : data.result === 'needs_review'
+              ? 'needs_review'
+              : 'error',
       }))
     } catch {
       setRetesting((prev) => ({ ...prev, [findingId]: 'error' }))
+    }
+  }, [])
+
+  const markFalsePositive = useCallback(async (findingId: string) => {
+    try {
+      await updateFinding(findingId, { triage_status: 'false_positive' })
+      setDismissed((prev) => ({ ...prev, [findingId]: true }))
+    } catch {
+      // The list reloads from the backend on the next visit; nothing to undo here.
     }
   }, [])
 
@@ -138,6 +156,26 @@ export function PassiveFindings() {
                         >
                           Send to Repeater
                         </button>
+
+                        <button
+                          className="text-left px-3 py-1.5 hover:bg-gray-700 text-gray-200"
+                          onClick={() => {
+                            setOpenMenuId(null)
+                            retest(f.id)
+                          }}
+                        >
+                          Retest finding
+                        </button>
+
+                        <button
+                          className="text-left px-3 py-1.5 hover:bg-gray-700 text-gray-200"
+                          onClick={() => {
+                            setOpenMenuId(null)
+                            markFalsePositive(f.id)
+                          }}
+                        >
+                          Mark false positive
+                        </button>
                         
                         <button
                           className="text-left px-3 py-1.5 hover:bg-gray-700 text-gray-200"
@@ -184,20 +222,28 @@ export function PassiveFindings() {
                     Fix: {f.remediation}
                   </div>
                 )}
+                {dismissed[f.id] && (
+                  <div className="mt-2 text-xs px-2 py-1 rounded inline-block text-gray-400 bg-gray-800/60">
+                    Dismissed as false positive — excluded from reports
+                  </div>
+                )}
                 {retestState !== 'idle' && retestState !== 'loading' && (
                   <div
                     className={`mt-2 text-xs px-2 py-1 rounded inline-block ${
                       retestState === 'confirmed'
                         ? 'text-green-400 bg-green-400/10'
-                        : retestState === 'fixed'
-                        ? 'text-red-400 bg-red-400/10'
-                        : 'text-yellow-400 bg-yellow-400/10'
+                        : retestState === 'needs_review'
+                        ? 'text-yellow-400 bg-yellow-400/10'
+                        : 'text-red-400 bg-red-400/10'
                     }`}
                   >
-                    {retestState === 'confirmed' && 'Confirmed'}
-                    {retestState === 'fixed' && 'Fixed'}
-                    {retestState === 'error' && 'Error'}
+                    {retestState === 'confirmed' && 'Confirmed — still reproducible'}
+                    {retestState === 'needs_review' && 'Needs review — the response changed'}
+                    {retestState === 'error' && 'Retest failed'}
                   </div>
+                )}
+                {retestState === 'loading' && (
+                  <div className="mt-2 text-xs text-gray-500">Retesting…</div>
                 )}
               </div>
             )

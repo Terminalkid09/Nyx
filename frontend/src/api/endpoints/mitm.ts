@@ -28,6 +28,9 @@ export interface MitmStatus {
   local_ip?: string | null
   proxy_host?: string | null
   proxy_port?: number | null
+  // Portal moves off 18081 when that port is taken.
+  ca_portal_port?: number
+  ca_portal_url?: string | null
   tls_mitm?: boolean
   quic_blocked_packets?: number
   // "drop" (force TCP fallback, default) | "allow" (QUIC passes through)
@@ -156,6 +159,33 @@ export async function getCaCertUrl(): Promise<string> {
   return '/api/ca-certificate'
 }
 
+export interface CaStatus {
+  platform: string
+  trusted: boolean | null
+  inconclusive: boolean
+  stores: Record<string, number>
+  detail: string
+  certificate: string | null
+}
+
+export async function getCaStatus(): Promise<CaStatus> {
+  const { data } = await apiClient.get<CaStatus>('/api/ca/status')
+  return data
+}
+
+export interface CaRemovalResult {
+  status: string
+  message: string
+  removed: boolean
+  still_present: string[]
+  stores: Record<string, { before?: number | null; after?: number | null }>
+}
+
+export async function removeCaFromHost(): Promise<CaRemovalResult> {
+  const { data } = await apiClient.post<CaRemovalResult>('/api/ca/remove')
+  return data
+}
+
 export async function getMitmPackets(limit = 120): Promise<MitmPacket[]> {
   const { data } = await apiClient.get('/api/mitm/packets', { params: { limit } })
   return Array.isArray(data) ? data : []
@@ -175,10 +205,5 @@ export interface MitmPacketDetail {
 
 export async function getMitmPacketDetail(seq: number): Promise<MitmPacketDetail> {
   const { data } = await apiClient.get(`/api/mitm/packets/${seq}`)
-  return data
-}
-
-export async function removeCaFromHost(): Promise<{ status: string; message: string }> {
-  const { data } = await apiClient.post('/api/ca/remove')
   return data
 }

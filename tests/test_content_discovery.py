@@ -15,12 +15,32 @@ from core.events.bus import EventBus
 from modules.content_discovery.service import ContentDiscoveryService
 
 
+@pytest.fixture(autouse=True)
+def _allow_target(monkeypatch):
+    """Bypass the RoE gate.
+
+    Content discovery now asks ``authorize()`` before touching the target
+    (BUG-06). With no active authorization profile every probe is refused, so
+    the wildcard/promotion assertions below never see a response. These tests
+    are about parsing and promotion, not about scope, so the gate is stubbed.
+    """
+    async def _allow(session_id, url):
+        return True, None, None
+
+    monkeypatch.setattr("modules.content_discovery.service.authorize", _allow)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _mock_response(status: int, content: bytes = b"OK") -> MagicMock:
     resp = MagicMock()
     resp.status_code = status
     resp.content = content
+    # The service fingerprints ``resp.text`` (it hashes the decoded body), so
+    # the mock must expose it too: without this the wildcard helpers received
+    # a MagicMock and the suite failed with "expected string or bytes-like
+    # object" instead of exercising the code under test.
+    resp.text = content.decode("utf-8", "replace")
     return resp
 
 
@@ -127,11 +147,11 @@ class TestSensitiveFilePromotion:
         wildcard_resp = _mock_response(404, b"Not Found")
         env_resp = _mock_response(200, b"DB_PASSWORD=secret\nAPP_KEY=abc123")
 
-        call_count = {"n": 0}
-
-        async def smart_response(*args, **kwargs):
-            call_count["n"] += 1
-            return wildcard_resp if call_count["n"] == 1 else env_resp
+        async def smart_response(method, url, *args, **kwargs):
+            # The wildcard baseline probes ``nyx-not-found-<uuid>`` paths first;
+            # answering those with the sensitive body made the real hit look
+            # like a catch-all. Match on the path, not on the call order.
+            return wildcard_resp if "nyx-not-found" in url else env_resp
 
         mock_client = AsyncMock()
         mock_client.request = smart_response
@@ -218,11 +238,8 @@ class TestSensitiveFilePromotion:
         wildcard_resp = _mock_response(404, b"Not Found")
         bak_resp = _mock_response(200, b"old config content")
 
-        call_count = {"n": 0}
-
-        async def smart_response(*args, **kwargs):
-            call_count["n"] += 1
-            return wildcard_resp if call_count["n"] == 1 else bak_resp
+        async def smart_response(method, url, *args, **kwargs):
+            return wildcard_resp if "nyx-not-found" in url else bak_resp
 
         mock_client = AsyncMock()
         mock_client.request = smart_response

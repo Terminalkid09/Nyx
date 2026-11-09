@@ -29,6 +29,7 @@ class XxeCheck(BaseCheck):
                                 evidence=f"Payload: {payload[:100]}...",
                                 remediation="Disable XML external entity processing. Use JSON instead of XML where possible.",
                                 cwe="CWE-611",
+                                param=param,
                             ))
                     except Exception:
                         continue

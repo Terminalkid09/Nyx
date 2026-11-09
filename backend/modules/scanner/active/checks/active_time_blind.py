@@ -12,7 +12,7 @@ not just noise.
 import time
 import asyncio
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 from urllib.parse import urlparse, parse_qsl, urlencode
 
 # (payload, category, description)
@@ -57,7 +57,7 @@ class ActiveTimeBlindCheck(BaseCheck):
                 return results  # Target unreachable
 
             for param in target_params:
-                for payload, category, desc in TIME_PAYLOADS:
+                for payload, category, desc in cap_payloads(TIME_PAYLOADS):
                     try:
                         elapsed = await self._time_request(client, base_request, param, payload)
                         if elapsed is None:
@@ -87,6 +87,7 @@ class ActiveTimeBlindCheck(BaseCheck):
                                     "Validate and sanitize all user input."
                                 ),
                                 cwe="CWE-89" if "sqli" in category else "CWE-78",
+                                param=param,
                             ))
                             break  # Found one for this param, move to next param
                     except Exception:

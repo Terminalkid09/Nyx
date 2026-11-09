@@ -33,6 +33,7 @@ class SstiInjectionCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nIndicator: {indicator}",
                                 remediation="Do not render user input as templates. Use sandboxed template engines.",
                                 cwe="CWE-1336",
+                                param=param,
                             ))
                     except Exception:
                         continue

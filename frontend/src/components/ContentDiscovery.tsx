@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { apiClient } from '../api/client'
 import { useJobsStore } from '../store/useJobsStore'
+import { useSessionStore } from '../store/useSessionStore'
 
 interface DiscoveredItem {
   url: string
@@ -31,6 +32,7 @@ interface DiscoveryJob {
 }
 
 export function ContentDiscovery() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const { jobs: storedJobs, setJob: storeJob, clearJob: clearStoredJob } = useJobsStore()
   const [targetUrl, setTargetUrl] = useState('')
   const [wordlist, setWordlist] = useState('')
@@ -79,6 +81,7 @@ export function ContentDiscovery() {
         extensions: extList,
         methods,
         throttle_ms: throttle,
+        session_id: activeSessionId,
       })
       setJobId(data.job_id)
       storeJob('content-discovery', data.job_id, 'pending')

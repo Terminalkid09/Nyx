@@ -43,6 +43,7 @@ class SsrfCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nIndicator: {indicator}",
                                     remediation="Validate and restrict URL parameters. Block private IP ranges. Use an allowlist.",
                                     cwe="CWE-918",
+                                    param=param,
                                 ))
                     except Exception:
                         continue

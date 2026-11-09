@@ -42,8 +42,9 @@ backend-unit-test:
     POSTGRES_DB: nyx_test
   before_script:
     - cd backend
-    - pip install -r requirements.txt
-    - pip install pytest pytest-asyncio pytest-httpx httpx mitmproxy
+    # requirements-dev.txt already includes requirements.txt plus the test
+    # tooling; installing them separately drifted from CI.
+    - pip install -r requirements-dev.txt
   script:
     - python -m pytest tests/ -v --junitxml=report.xml -k "not test_proxy_e2e"
   artifacts:
@@ -58,8 +59,7 @@ backend-e2e-test:
   before_script:
     - apt-get update && apt-get install -y --no-install-recommends net-tools iproute2
     - cd backend
-    - pip install -r requirements.txt
-    - pip install pytest pytest-asyncio httpx mitmproxy
+    - pip install -r requirements-dev.txt
   script:
     - python -m pytest tests/test_proxy_e2e.py -v --junitxml=report-e2e.xml
   artifacts:

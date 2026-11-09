@@ -4,9 +4,15 @@ import {
   getOwaspReport,
   getPciDssReport,
   getGdprReport,
+  getNis2Report,
+  getIso27001Report,
   type OwaspReport,
   type PciDssReport,
   type GdprReport,
+  type Nis2Report,
+  type Iso27001Report,
+  type Measure,
+  type MeasureStatus,
 } from '../../api/endpoints/compliance'
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -17,8 +23,15 @@ const SEVERITY_COLORS: Record<string, string> = {
   info: 'text-gray-400 bg-gray-400/10',
 }
 
-function Badge({ pass, count }: { pass: boolean; count: number }) {
-  if (pass) {
+function Badge({ pass, count, status }: { pass?: boolean; count: number; status?: MeasureStatus }) {
+  if (status === 'NOT_ASSESSED') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-400/10 text-gray-400">
+        <CheckCircle size={12} /> NOT ASSESSED
+      </span>
+    )
+  }
+  if (status ? status === 'PASS' : pass) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-400/10 text-green-400">
         <CheckCircle size={12} /> PASS
@@ -147,11 +160,70 @@ function GdprSection({ report }: { report: GdprReport }) {
   )
 }
 
+type MeasureRow = Measure & { measure_id?: string; control_id?: string }
+
+function MeasureList({
+  label,
+  color,
+  idKey,
+  rows,
+  summary,
+  scope,
+}: {
+  label: string
+  color: string
+  idKey: 'measure_id' | 'control_id'
+  rows: MeasureRow[]
+  summary: { passed: number; total: number; not_assessed: number }
+  scope: { basis: string; caveat: string }
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3 mb-4">
+        <FileCheck size={20} className={color} />
+        <h3 className="text-sm font-semibold text-gray-200">{label}</h3>
+        <span className="text-xs text-gray-500">
+          {summary.passed}/{summary.total} assessed and clean
+          {summary.not_assessed > 0 ? ` · ${summary.not_assessed} not assessed` : ''}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-1">
+        {rows.map((row) => {
+          const id = (idKey === 'measure_id' ? row.measure_id : row.control_id) || ''
+          return (
+            <div
+              key={id}
+              className={`flex items-center gap-3 px-3 py-2 border rounded-lg ${
+                row.status === 'FAIL'
+                  ? 'border-red-900/30 bg-red-950/10'
+                  : row.status === 'PASS'
+                    ? 'border-green-900/30 bg-green-950/10'
+                    : 'border-gray-800 bg-gray-900/20'
+              }`}
+            >
+              <span className="text-xs font-mono text-gray-400 w-16">{id}</span>
+              <span className="text-xs text-gray-300 flex-1">{row.title}</span>
+              <Badge pass={row.status === 'PASS'} count={row.violation_count} status={row.status} />
+            </div>
+          )
+        })}
+      </div>
+
+      <p className="text-[11px] text-gray-500 leading-relaxed pt-2 border-t border-gray-800">
+        {scope.basis}. {scope.caveat}
+      </p>
+    </div>
+  )
+}
+
 export function Compliance() {
-  const [tab, setTab] = useState<'owasp' | 'pci' | 'gdpr'>('owasp')
+  const [tab, setTab] = useState<'owasp' | 'pci' | 'gdpr' | 'nis2' | 'iso'>('owasp')
   const [owasp, setOwasp] = useState<OwaspReport | null>(null)
   const [pci, setPci] = useState<PciDssReport | null>(null)
   const [gdpr, setGdpr] = useState<GdprReport | null>(null)
+  const [nis2, setNis2] = useState<Nis2Report | null>(null)
+  const [iso, setIso] = useState<Iso27001Report | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -159,10 +231,18 @@ export function Compliance() {
     setLoading(true)
     setError('')
     try {
-      const [o, p, g] = await Promise.all([getOwaspReport(), getPciDssReport(), getGdprReport()])
+      const [o, p, g, n, i] = await Promise.all([
+        getOwaspReport(),
+        getPciDssReport(),
+        getGdprReport(),
+        getNis2Report(),
+        getIso27001Report(),
+      ])
       setOwasp(o)
       setPci(p)
       setGdpr(g)
+      setNis2(n)
+      setIso(i)
     } catch (e: any) {
       setError(e.response?.data?.detail || e.message)
     } finally {
@@ -173,7 +253,7 @@ export function Compliance() {
   useEffect(() => { load() }, [])
 
   const exportJson = () => {
-    const data = { owasp, pci_dss: pci, gdpr }
+    const data = { owasp, pci_dss: pci, gdpr, nis2, iso27001: iso }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -187,6 +267,8 @@ export function Compliance() {
     { id: 'owasp' as const, label: 'OWASP Top 10', icon: Shield },
     { id: 'pci' as const, label: 'PCI-DSS', icon: FileCheck },
     { id: 'gdpr' as const, label: 'GDPR', icon: Shield },
+    { id: 'nis2' as const, label: 'NIS2', icon: FileCheck },
+    { id: 'iso' as const, label: 'ISO 27001', icon: FileCheck },
   ]
 
   return (
@@ -243,6 +325,26 @@ export function Compliance() {
         {!loading && !error && owasp && tab === 'owasp' && <OwaspSection report={owasp} />}
         {!loading && !error && pci && tab === 'pci' && <PciDssSection report={pci} />}
         {!loading && !error && gdpr && tab === 'gdpr' && <GdprSection report={gdpr} />}
+        {!loading && !error && nis2 && tab === 'nis2' && (
+          <MeasureList
+            label="NIS2 Art. 21(2)"
+            color="text-amber-400"
+            idKey="measure_id"
+            rows={nis2.measures}
+            summary={nis2.summary}
+            scope={nis2.scope}
+          />
+        )}
+        {!loading && !error && iso && tab === 'iso' && (
+          <MeasureList
+            label="ISO/IEC 27001:2022 Annex A"
+            color="text-emerald-400"
+            idKey="control_id"
+            rows={iso.controls}
+            summary={iso.summary}
+            scope={iso.scope}
+          />
+        )}
       </div>
     </div>
   )

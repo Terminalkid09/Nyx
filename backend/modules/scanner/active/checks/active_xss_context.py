@@ -172,6 +172,7 @@ class ActiveXssContextCheck(BaseCheck):
                                     "Content-Security-Policy as defense in depth."
                                 ),
                                 cwe="CWE-79",
+                                param=param,
                             ))
                             break  # One confirmed payload per context per param
                     except Exception:

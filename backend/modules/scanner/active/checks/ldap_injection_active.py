@@ -1,7 +1,7 @@
 import copy
 import re
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class LdapInjectionActiveCheck(BaseCheck):
@@ -9,10 +9,17 @@ class LdapInjectionActiveCheck(BaseCheck):
 
     async def run(self, base_request: dict, target_params: list[str]) -> list[CheckResult]:
         results = []
-        payloads = [")", "*)", "(&(1=0))", "(&(1=1))", "*)(&", "admin*", "*", "*|", "|*"]
+        # Union of the payload sets three near-identical LDAP checks used to
+        # send separately; one check now covers all of them.
+        payloads = [
+            ")", "*)", "(&(1=0))", "(&(1=1))", "*)(&", "admin*", "*", "*|", "|*",
+            "*)(uid=*))(|(uid=*", "*)(|(uid=*", "*)(uid=*",
+            "admin*)((|userPassword=*)", "*))(|(cn=", "*)((&(cm=admin))",
+            "admin*)((|userpassword=*", "admin*))(|(userpassword=*",
+        ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload in payloads:
+                for payload in cap_payloads(payloads):
                     modified = self._inject_payload(base_request, param, payload)
                     try:
                         resp = await client.request(**modified)
@@ -27,6 +34,7 @@ class LdapInjectionActiveCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nError pattern: {pattern}",
                                     remediation="Sanitize LDAP search filters. Use parameterised LDAP queries or escape special characters.",
                                     cwe="CWE-90",
+                                    param=param,
                                 ))
                                 break
                     except Exception:

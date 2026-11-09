@@ -3,6 +3,7 @@ import { useSearchParams, useLocation } from 'react-router-dom'
 import { Plus, X, History } from 'lucide-react'
 import { RequestEditor } from './RequestEditor'
 import { sendRequest, fetchTabs, closeTab, fetchTabHistory } from '../../api/endpoints/repeater'
+import { useSessionStore } from '../../store/useSessionStore'
 
 interface TabData {
   id: string
@@ -43,6 +44,7 @@ function freshTab(url?: string, method?: string, headers?: string, body?: string
 }
 
 export function Repeater() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const initialTabId = searchParams.get('tab')
@@ -144,7 +146,13 @@ export function Repeater() {
           if (k) hdrs[k] = v
         }
       })
-      const result = await sendRequest(activeTab.method, fullUrl, hdrs, activeTab.body || undefined)
+      const result = await sendRequest(
+        activeTab.method,
+        fullUrl,
+        hdrs,
+        activeTab.body || undefined,
+        activeSessionId,
+      )
       const entry = {
         method: activeTab.method,
         url: fullUrl,

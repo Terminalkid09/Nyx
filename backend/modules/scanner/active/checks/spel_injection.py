@@ -31,6 +31,7 @@ class SpelInjectionCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nIndicator: {indicator}",
                                 remediation="Do not evaluate user input as SpEL expressions. Use SimpleEvaluationContext.",
                                 cwe="CWE-917",
+                                param=param,
                             ))
                     except Exception:
                         continue

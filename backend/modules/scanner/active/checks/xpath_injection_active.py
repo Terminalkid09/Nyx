@@ -1,7 +1,7 @@
 import copy
 import re
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class XPathInjectionActiveCheck(BaseCheck):
@@ -9,10 +9,15 @@ class XPathInjectionActiveCheck(BaseCheck):
 
     async def run(self, base_request: dict, target_params: list[str]) -> list[CheckResult]:
         results = []
-        payloads = ["'", "''", "']|//*|", "']|//user/*|", "1' and '1'='1", "1' and '1'='2", "' and 1=1 and ''='", "' and 1=2 and ''='"]
+        payloads = [
+            "'", "''", "']|//*|", "']|//user/*|",
+            "1' and '1'='1", "1' and '1'='2", "' and 1=1 and ''='", "' and 1=2 and ''='",
+            "' or '1'='1", "' and '1'='1", "' or 1=1--", "' or '1'='1' --",
+            "' or 1=1 or '1'='1", "' or '1'='1' or '1'='1",
+        ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload in payloads:
+                for payload in cap_payloads(payloads):
                     modified = self._inject_payload(base_request, param, payload)
                     try:
                         resp = await client.request(**modified)
@@ -27,6 +32,7 @@ class XPathInjectionActiveCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nError pattern: {pattern}",
                                     remediation="Use parameterised XPath queries or escape special characters. Avoid building XPath expressions with user input.",
                                     cwe="CWE-643",
+                                    param=param,
                                 ))
                                 break
                     except Exception:

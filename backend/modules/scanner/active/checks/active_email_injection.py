@@ -35,6 +35,7 @@ class ActiveEmailInjectionCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Sanitize email inputs. Remove newline characters from email headers. Use well-tested email libraries.",
                                 cwe="CWE-93",
+                                param=param,
                             ))
                     except Exception:
                         continue

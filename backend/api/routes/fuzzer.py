@@ -1,11 +1,11 @@
 import asyncio
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from api.deps import get_db
-from core.storage.models import FuzzJob
+from core.storage.models import FuzzJob, FuzzResult
 from core.events.bus import EventBus
 from modules.fuzzer.service import FuzzerService
 from pydantic import BaseModel
@@ -155,16 +155,51 @@ async def get_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     return JobResponse.model_validate(job)
 
 
+def _result_dict(row: FuzzResult) -> dict:
+    """Serialise a ``fuzz_results`` row in the shape the UI already uses."""
+    return {
+        "id": str(row.id),
+        "seq": row.seq,
+        "payload": row.payload or {},
+        "status": row.status,
+        "size": row.size,
+        "time_ms": row.time_ms,
+        "error": row.error,
+        "waf_detected": row.waf_detected,
+        "grep_results": row.grep_results or {},
+        "extracted": row.extracted or {},
+        "request": row.request,
+        "response": row.response,
+        "truncated": row.truncated,
+    }
+
+
 @router.get("/jobs/{job_id}/results")
-async def get_job_results(job_id: uuid.UUID, status_filter: int | None = None, db: AsyncSession = Depends(get_db)):
+async def get_job_results(
+    job_id: uuid.UUID,
+    status_filter: int | None = None,
+    limit: int = Query(2000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(FuzzJob).where(FuzzJob.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(404, detail="Job not found")
-    results_list = job.results or []
+
+    query = select(FuzzResult).where(FuzzResult.job_id == job_id).order_by(FuzzResult.seq)
     if status_filter is not None:
-        results_list = [r for r in results_list if r.get("status") == status_filter]
-    return results_list
+        query = query.where(FuzzResult.status == status_filter)
+    rows = (await db.execute(query.offset(offset).limit(limit))).scalars().all()
+    if rows:
+        return [_result_dict(r) for r in rows]
+
+    # Jobs created before BUG-04 fase B kept every result in the job's JSON
+    # column; keep serving them from there so old runs stay readable.
+    legacy = job.results or []
+    if status_filter is not None:
+        legacy = [r for r in legacy if r.get("status") == status_filter]
+    return legacy[offset:offset + limit]
 
 
 @router.post("/jobs/{job_id}/cancel")

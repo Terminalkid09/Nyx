@@ -46,6 +46,7 @@ class XssVariantsCheck(BaseCheck):
                                 evidence=f"Payload: {payload}\nStatus: {resp.status_code}",
                                 remediation="Encode output based on context. Use Content-Security-Policy.",
                                 cwe="CWE-79",
+                                param=param,
                             ))
                     except Exception:
                         continue

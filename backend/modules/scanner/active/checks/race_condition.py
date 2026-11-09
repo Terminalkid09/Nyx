@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, payload_budget
 
 RACE_COUNT = 15
 RACE_TIMEOUT = 10
@@ -22,7 +22,10 @@ class RaceConditionCheck(BaseCheck):
             if original.status_code not in (200, 201, 204, 302):
                 return results
 
-            tasks = [self._send_request(client, base_request) for _ in range(RACE_COUNT)]
+            # A race probe sends a burst by definition, but the scan profile
+            # still bounds it (deep = the full burst, fast = a small one).
+            count = min(RACE_COUNT, payload_budget() or RACE_COUNT)
+            tasks = [self._send_request(client, base_request) for _ in range(count)]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
 
             successful = 0
@@ -36,7 +39,7 @@ class RaceConditionCheck(BaseCheck):
                 evidence_lines = [f"Status distribution:"]
                 for status, count in sorted(status_counts.items()):
                     evidence_lines.append(f"  {status}: {count}")
-                evidence_lines.append(f"Total concurrent requests: {RACE_COUNT}")
+                evidence_lines.append(f"Total concurrent requests: {count}")
 
                 results.append(CheckResult(
                     triggered=True,

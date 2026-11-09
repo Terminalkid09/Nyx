@@ -25,6 +25,9 @@ const columnHelper = createColumnHelper<NyxRequest>()
 export function ProxyLog() {
   const navigate = useNavigate()
   const [captureActive, setCaptureActive] = useState(true)
+  // The shell moves the proxy off 8080 when that port is taken, so the hint
+  // text has to show the real listener instead of a hard-coded 8080.
+  const [proxyPort, setProxyPort] = useState(8080)
   const [sendingToRepeater, setSendingToRepeater] = useState<string | null>(null)
 
   const { requests, selectedId, filter, select } = useProxyStore()
@@ -48,6 +51,9 @@ export function ProxyLog() {
   useEffect(() => {
     apiClient.get('/api/proxy/capture')
       .then(r => setCaptureActive(r.data.capture_active))
+      .catch(() => {})
+    apiClient.get('/api/settings/proxy')
+      .then(r => { if (typeof r.data?.port === 'number') setProxyPort(r.data.port) })
       .catch(() => {})
   }, [])
 
@@ -222,13 +228,13 @@ export function ProxyLog() {
         {captureActive && requests.length === 0 && (
           <div className="flex flex-col items-center justify-center flex-1 text-gray-500 p-4 gap-2">
             <Radio size={36} className="text-green-400 animate-pulse" />
-            <p className="text-sm font-medium text-gray-300">Proxy is listening on port 8080</p>
+            <p className="text-sm font-medium text-gray-300">Proxy is listening on port {proxyPort}</p>
             <p className="text-xs text-gray-500">Waiting for traffic…</p>
             <div className="mt-2 bg-gray-900 border border-gray-800 rounded-lg p-3 text-left text-[11px] text-gray-400 space-y-1 max-w-xs">
               <p className="text-gray-300 font-medium text-xs mb-1">📌 To get started:</p>
-              <p>• <strong>Browser:</strong> configure proxy to <code className="text-purple-300">127.0.0.1:8080</code></p>
+              <p>• <strong>Browser:</strong> configure proxy to <code className="text-purple-300">127.0.0.1:{proxyPort}</code></p>
               <p>• <strong>MITM tab:</strong> scan a network and start intercepting a target</p>
-              <p>• <strong>Stealth Mode:</strong> set a target device's proxy to <code className="text-purple-300">NYX_IP:8080</code></p>
+              <p>• <strong>Stealth Mode:</strong> set a target device's proxy to <code className="text-purple-300">NYX_IP:{proxyPort}</code></p>
             </div>
           </div>
         )}

@@ -28,6 +28,7 @@ class ActiveSpelInjectionAdvancedCheck(BaseCheck):
                                     evidence=f"Payload: {payload}\nResponse snippet: {resp.text[:300]}",
                                     remediation="Disable SpEL evaluation on user input. Use validation. Do not evaluate user-controlled expressions.",
                                     cwe="CWE-917",
+                                    param=param,
                                 ))
                                 break
                     except httpx.TimeoutException:
@@ -39,6 +40,7 @@ class ActiveSpelInjectionAdvancedCheck(BaseCheck):
                             evidence=f"Payload: {payload}",
                             remediation="Disable SpEL evaluation on user input. Use validation. Do not evaluate user-controlled expressions.",
                             cwe="CWE-917",
+                            param=param,
                         ))
                     except Exception:
                         continue

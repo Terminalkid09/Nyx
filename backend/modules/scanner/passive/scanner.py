@@ -451,7 +451,14 @@ class PassiveScanner:
                 unique_results = []
                 for result in results:
                     if result.triggered:
-                        dedup_key = f"{result.cwe}_{result.title}_{event.get('url', '')}"
+                        # Findings are per session: the same URL captured in a
+                        # second session must still produce its own finding,
+                        # otherwise a new session silently shows nothing for
+                        # endpoints already seen elsewhere.
+                        dedup_key = (
+                            f"{event.get('session_id')}|{result.cwe}|"
+                            f"{result.title}|{event.get('url', '')}"
+                        )
                         if dedup_key in self.seen_findings:
                             continue
                         self.seen_findings.add(dedup_key)

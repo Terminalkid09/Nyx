@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from mitmproxy import http
 from sqlalchemy import select
 
+from core.config import settings
 from core.events.bus import EventBus
 from core.storage.models import InterceptorRule, InterceptedItem
 from core.utils.text import safe_decode
@@ -112,6 +113,12 @@ class InterceptorEngine:
             db.add(item)
             await db.commit()
 
+        # A paused flow holds the target's connection open. If the operator
+        # closes the UI (or forgets the item), release it after a TTL instead of
+        # hanging the client forever (BUG-09).
+        if settings.INTERCEPTOR_PAUSE_TTL_SECONDS > 0:
+            asyncio.create_task(self._expire_item(item_id))
+
         await self.event_bus.publish({
             "type": f"interceptor.{direction}.paused",
             "item_id": item_id,
@@ -119,6 +126,51 @@ class InterceptorEngine:
             "direction": direction,
             "method": flow.request.method,
             "url": flow.request.pretty_url,
+        })
+
+    async def _expire_item(self, item_id: str) -> None:
+        """Resume a paused flow after the TTL, answering 504 if unresolved."""
+        try:
+            await asyncio.sleep(settings.INTERCEPTOR_PAUSE_TTL_SECONDS)
+        except asyncio.CancelledError:
+            return
+
+        with self._lock:
+            flow = self._paused_flows.pop(item_id, None)
+            self.paused_items.pop(item_id, None)
+        if not flow:
+            return
+
+        try:
+            if flow.response is None:
+                flow.response = http.Response.make(
+                    504, b"Interceptor pause expired",
+                    {"Content-Type": "text/plain"},
+                )
+        except Exception as exc:
+            logger.debug("Could not attach expiry response to %s: %s", item_id, exc)
+
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(InterceptedItem).where(
+                        InterceptedItem.id == uuid.UUID(item_id)
+                    )
+                )
+                item = result.scalar_one_or_none()
+                if item:
+                    item.status = "expired"
+                    item.action = "expired"
+                    await db.commit()
+        except Exception as exc:
+            logger.warning("Could not mark intercepted item %s expired: %s", item_id, exc)
+
+        if self._mitmproxy_loop:
+            self._mitmproxy_loop.call_soon_threadsafe(flow.resume)
+
+        await self.event_bus.publish({
+            "type": "interceptor.item.expired",
+            "item_id": item_id,
         })
 
     def _get_cached_rules(self, direction: str) -> list[dict]:

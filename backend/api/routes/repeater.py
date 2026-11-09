@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from api.deps import ensure_authorized
+from core.authorization import authorize
 from modules.repeater.service import RepeaterService
 
 router = APIRouter(prefix="/api/repeater", tags=["repeater"])
@@ -12,6 +14,8 @@ class RepeaterRequest(BaseModel):
     url: str
     headers: dict = {}
     body: str | None = None
+    # Required: sending from Repeater is an active request to the target.
+    session_id: str
 
 
 class RepeaterResponse(BaseModel):
@@ -45,8 +49,14 @@ class HistoryEntry(BaseModel):
     timestamp: str
 
 
+async def _authorize_request(req: RepeaterRequest) -> None:
+    decision = await authorize(req.session_id, req.url, require_session=True)
+    ensure_authorized(*decision)
+
+
 @router.post("/send", response_model=RepeaterResponse)
 async def send_request(req: RepeaterRequest):
+    await _authorize_request(req)
     tab = service.create_tab(name="Direct", request_data=req.model_dump())
     result = await service.send_request(tab.id, req.method, req.url, req.headers, req.body)
     if not result:
@@ -56,6 +66,7 @@ async def send_request(req: RepeaterRequest):
 
 @router.post("/tabs/{tab_id}/send", response_model=RepeaterResponse)
 async def send_tab_request(tab_id: str, req: RepeaterRequest):
+    await _authorize_request(req)
     result = await service.send_request(tab_id, req.method, req.url, req.headers, req.body)
     if not result:
         raise HTTPException(500, detail="Failed to send request")

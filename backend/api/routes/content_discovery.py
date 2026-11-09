@@ -5,10 +5,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from api.deps import get_db
+from api.deps import ensure_authorized, get_db
+from core.authorization import authorize
 from core.storage.models import ContentDiscoveryJob
 from core.storage.database import AsyncSessionLocal
-from core.storage.traffic import DEFAULT_SESSION_ID
 from core.events.bus import EventBus
 from modules.content_discovery.service import ContentDiscoveryService
 from pydantic import BaseModel
@@ -27,7 +27,12 @@ class StartDiscoveryRequest(BaseModel):
     extensions: list[str] = [""]
     methods: list[str] = ["GET"]
     throttle_ms: int = 0
-    session_id: str | None = None
+    # Required: discovery sends thousands of requests and must inherit the
+    # session's scope rules instead of falling back to the default session.
+    session_id: str
+    concurrency: int = 20
+    recursive: bool = False
+    max_depth: int = 1
 
 
 class StartDiscoveryResponse(BaseModel):
@@ -77,6 +82,9 @@ async def _run_discovery_in_background(
                 methods=body.methods,
                 throttle_ms=body.throttle_ms,
                 session_id=body.session_id,
+                concurrency=body.concurrency,
+                recursive=body.recursive,
+                max_depth=body.max_depth,
             )
 
             _discovery_jobs[job_id] = {
@@ -111,10 +119,15 @@ async def _run_discovery_in_background(
 
 @router.post("/start", response_model=StartDiscoveryResponse, status_code=201)
 async def start_discovery(body: StartDiscoveryRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    decision = await authorize(
+        body.session_id, body.target_url, require_session=True
+    )
+    ensure_authorized(*decision)
     try:
-        session_uuid = uuid.UUID(body.session_id) if body.session_id else DEFAULT_SESSION_ID
-    except ValueError:
-        session_uuid = DEFAULT_SESSION_ID
+        session_uuid = uuid.UUID(body.session_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, detail="session_id is not a UUID")
+
     job = ContentDiscoveryJob(
         session_id=session_uuid,
         target_url=body.target_url,
@@ -124,6 +137,9 @@ async def start_discovery(body: StartDiscoveryRequest, request: Request, db: Asy
             "extensions": body.extensions,
             "methods": body.methods,
             "throttle_ms": body.throttle_ms,
+            "concurrency": body.concurrency,
+            "recursive": body.recursive,
+            "max_depth": body.max_depth,
         },
     )
     db.add(job)
@@ -181,6 +197,44 @@ async def stop_discovery(job_id: str, request: Request):
 async def list_wordlists(request: Request):
     service = get_discovery_service(request)
     return service.list_wordlists()
+
+
+@router.get("/wordlists/meta")
+async def wordlist_metadata(request: Request):
+    service = get_discovery_service(request)
+    return service.wordlist_metadata()
+
+
+class WordlistUploadRequest(BaseModel):
+    name: str
+    content: str
+
+
+@router.post("/wordlists/upload")
+async def upload_wordlist(body: WordlistUploadRequest, request: Request):
+    service = get_discovery_service(request)
+    result = service.save_wordlist(body.name, body.content)
+    if "error" in result:
+        raise HTTPException(400, detail=result["error"])
+    return result
+
+
+@router.get("/wordlists/{name}/preview")
+async def preview_wordlist(name: str, request: Request, limit: int = 50):
+    service = get_discovery_service(request)
+    result = service.preview_wordlist(name, limit=limit)
+    if "error" in result:
+        raise HTTPException(404, detail=result["error"])
+    return result
+
+
+@router.delete("/wordlists/{name}")
+async def delete_wordlist(name: str, request: Request):
+    service = get_discovery_service(request)
+    result = service.delete_wordlist(name)
+    if "error" in result:
+        raise HTTPException(404, detail=result["error"])
+    return result
 
 
 @router.get("/jobs")

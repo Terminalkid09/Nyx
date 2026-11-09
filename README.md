@@ -14,7 +14,8 @@
   <a href="#desktop-app">Desktop App</a> •
   <a href="#building-from-source">Building</a> •
   <a href="#documentation">Documentation</a> •
-  <a href="#license">License</a>
+  <a href="#license">License</a> •
+  <a href="SECURITY.md">Security</a>
 </p>
 
 <p align="center">
@@ -41,14 +42,15 @@
 | **Network layer (passive)** | Wireshark-style LAN capture: live packet list with detail dissection, TCP/UDP stream reassembly, protocol decoders (TLS/HTTP/HTTP2/DNS/QUIC), PCAP/PCAPNG export, ARP-spoof & ICMP-tunnel detection |
 | **Vulnerability scanning** | 210+ passive checks, 110+ active probes, custom regex checks, content discovery, JS-aware crawler |
 | **Automation** | Scheduled scans, webhooks, auto-reports, auto-exploit PoC generator (21+ CWE types) |
-| **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling |
+| **Testing tools** | Repeater, Fuzzer (multi-mode), Sequencer, Comparer, Decoder, Session Handling, A/B replay (two identities + anonymous leg) |
+| **API inventory** | OpenAPI 2.0/3.x documents and Burp XML exports become an endpoint inventory with contract warnings, optionally added to the session scope |
 | **OAST** | Self-hosted Collaborator server (Go) for blind XXE/SSRF/DNS exfiltration detection |
 | **Advanced MITM** | ARP/DHCP/NDP spoofing with auto-fallback, rogue-DHCP-first stealth mode with post-stop lease healing (targets recover in seconds), **reactive ARP** (sniff-and-reply, undetectable), **RA spoofing (IPv6)**, **WiFi AP mode** (rogue hotspot — the target connects to you, zero spoofing), network device discovery, always-on CA portal with QR install, QUIC/HTTP3 blocking, gRPC parsing (native C++ module) |
-| **Smart Triage** | Severity-based finding grouping, retest, CVE-style workflow with filtering |
+| **Smart Triage** | Severity-based finding grouping, retest with the outcome recorded, operator severity override, false-positive dismissal (hidden from reports, evidence kept) |
 | **Recommendation Engine** | Auto-suggests next actions (fuzz, exploit, scan) when findings are created |
 | **Auto Exploit** | URL structure analysis + DB findings lookup → smart CWE suggestions with ranking |
-| **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32 compliance reports auto-generated from findings |
-| **Security Hardening** | SQLCipher AES-256 encryption at-rest, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail |
+| **Compliance Reports** | OWASP Top 10, PCI-DSS v4.0, GDPR Art. 32, NIS2 Art. 21(2) and ISO/IEC 27001:2022 Annex A reports auto-generated from findings; measures a scan cannot evidence are marked NOT ASSESSED instead of passing |
+| **Security Hardening** | Host/Origin validation, token-bucket rate limiting, Prometheus metrics, structured JSON logging, sensitive header redaction, immutable audit trail; **optional** SQLCipher AES-256 encryption at-rest (off by default — the SQLite file is plaintext unless `NYX_SQLCIPHER_KEY` is set) |
 | **Operations & Compliance** | Health checks (`/health`, `/healthz`), `/metrics` endpoint, 900+ tests, CI/CD pipeline, Electron code signing |
 
 Nyx is an open-source web security testing platform. It provides traffic interception, automated scanning, fuzzing, and reporting — with a focus on LAN-based zero-config MITM interception and self-hosted OAST.
@@ -74,11 +76,11 @@ Nyx is an open-source web security testing platform. It provides traffic interce
 | Module | Description |
 |--------|-------------|
 | **Passive Scanner** | 210+ checks analyzing traffic in real time for vulnerabilities + Wappalyzer-style tech fingerprinting + info disclosure (credit cards, SSN, API keys) |
-| **Active Scanner** | 110+ active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more — with boolean-blind SQLi, time-based blind detection, context-aware XSS, and OAST |
+| **Active Scanner** | 138 active probes: SQLi, XSS, SSRF, SSTI, XXE, IDOR, and more — with boolean-blind SQLi, time-based blind detection, context-aware XSS, and OAST. Checks run concurrently, deduplicated per parameter, and every probe passes the scope/RoE gate and its rate cap |
 | **Scan Depth Profiles** | `fast` / `balanced` / `deep` — control scanner intensity (payload counts, blind/time/OAST checks) via `GET /api/active-scanner/depths` |
 | **Smart IDOR Check** | JSON-aware IDOR detection that compares schema vs values (cross-account data access) to eliminate false positives |
 | **Custom Checks** | User-defined regex/string checks with severity, run against captured requests |
-| **Content Discovery** | Directory/file brute-forcing with wildcard/catch-all baseline filtering & auto-finding for sensitive files (`.env`, `.bak`) |
+| **Content Discovery** | Concurrent directory/file brute-forcing with soft-404 body-similarity filtering, optional recursion, and auto-finding for sensitive files (`.env`, `.bak`) |
 | **Crawler** | JS-aware autonomous spidering via Playwright (headless Chromium) |
 | **Collaborator (OAST)** | Self-hosted out-of-band server (Go) — detects blind XXE, blind SSRF, DNS exfiltration via DNS/HTTP interactions with webhook forwarding |
 | **Live Audit** | Continuous passive analysis of all proxied traffic |
@@ -228,7 +230,7 @@ Brute-force directories and files on a target using customizable wordlists.
 2. Select wordlist, extensions (`.php`, `.bak`, `.json`), methods, throttle
 3. Click **Start** → results with status codes and timings
 
-**Built-in wordlists:** Common dirs, files, API endpoints.
+**Built-in wordlists:** SecLists-derived dirs (~20k), files (~11k), common (~4.7k), API endpoints, parameter names (~6.4k) and a curated backup/secret list, plus a quick list for the pipeline. Import your own from the UI/API (`POST /api/content-discovery/wordlists/upload`) and manage them with `GET /wordlists/meta`, `GET /wordlists/{name}/preview`, `DELETE /wordlists/{name}`.
 
 ---
 
@@ -420,13 +422,13 @@ Intercept traffic from any device on the same LAN **without configuring the targ
 **IPv6 targets** are handled with **RA (Router Advertisement) spoofing** — forged RAs elect Nyx as the target's IPv6 router legitimately, so IPv6 traffic is intercepted without NDP detection.
 
 **How to use:**
-1. Launch Nyx **as administrator**
+1. Launch Nyx with Administrator rights — the packaged Windows build asks through UAC; in a source checkout start it from an elevated shell
 2. **MITM** tab → click **Scan Network** to auto-discover all devices on LAN
 3. Check the devices to intercept (or type IP manually via text field + _Add_)
 4. Set gateway (auto-detected) → Toggle DNS spoofing if needed
 5. Click **Start Interception**
 6. If the target does not reconnect on its own (existing connection), the DHCP phase NAKs the target's renewal so it drops the old lease and re-negotiates — a fresh **DISCOVER** that Nyx can answer
-7. Install CA on target: `http://<NYX_IP>:8000/api/mitm/portal` or _Download CA_
+7. Install the CA on the target: open `http://<NYX_IP>:18081` from the device (or scan the QR in the MITM tab); the portal follows the proxy if 18081 is taken
 8. **Stop Interception** when done
 
 > **💡 For already-connected devices:** a Wi-Fi **toggle** only renews the old lease directly with the router (which Nyx never sees). If the target is already connected, ask it to **"forget the network"** and rejoin — this forces a broadcast DISCOVER that the rogue DHCP server can win, or wait for the automatic ARP fallback.
@@ -498,13 +500,22 @@ Download the latest installer for your platform from the [Releases](https://gith
 | **macOS** | `Nyx *.dmg` |
 | **Linux** | `Nyx *.AppImage` or `nyx_*.deb` |
 
-Double-click and launch. No Python, Node.js, or Docker required.
+Double-click and launch. No Python, Node.js, or Docker required — the packaged
+app starts its own backend process; nothing runs in a container.
 
-> **💡 For ARP Spoofing (zero-config interception):** Launch the app as **administrator**.
-> - Windows: right-click → _Run as administrator_
-> - macOS/Linux: `sudo /opt/Nyx/nyx-backend` or `sudo npm start` (dev mode)
+> **💡 Administrator rights:** the Windows build carries a
+> `requireAdministrator` manifest, so **Windows shows the UAC prompt as soon as
+> you launch it** (accept it — Nyx needs raw sockets for ARP/DNS spoofing,
+> WinDivert for the transparent proxy, and the firewall rules it manages).
+> macOS/Linux have no equivalent prompt: start the app with `sudo` when you
+> need spoofing, or run it as a normal user for forward-proxy mode.
 
-### Docker
+> **🔌 Ports are automatic:** Nyx prefers API `8000`, proxy `8080` and CA portal
+> `18081`, but never fails when one is taken — it walks to the next free port
+> and every URL the UI shows (proxy address, QR code, settings) uses the port it
+> actually bound. Nothing to configure by hand.
+
+### Docker (optional — for the web UI only)
 
 ```bash
 git clone https://github.com/Terminalkid09/nyx.git
@@ -519,6 +530,17 @@ docker compose up --build -d
 | **Dashboard** | [http://localhost](http://localhost) |
 | **Proxy** | `127.0.0.1:8080` (configure your browser) |
 | **API** | [http://localhost:8000](http://localhost:8000) |
+
+The stack pins its bridge network to `172.28.0.0/24` so nginx is the only
+trusted proxy, and the backend accepts unauthenticated API calls from exactly
+that range. If another Docker network already owns the range, `up` fails with
+*"Pool overlaps with other one on this address space"*: pick a free one and
+set both variables to it.
+
+```bash
+NYX_DOCKER_SUBNET=172.30.0.0/24 TRUSTED_PROXY_CIDRS=172.30.0.0/24 \
+  docker compose up --build -d
+```
 
 ### Source (development)
 
@@ -537,14 +559,18 @@ npm run dev
 ### Quality gates
 
 ```bash
-# Backend tests (909 tests)
-cd backend && python -m pytest tests -q --asyncio-mode=auto
+# Backend (pytest.ini sets asyncio_mode=auto: no CLI flag needed)
+cd backend && python -m pytest -q
 
-# Frontend: type check, lint, unit tests
+# Legacy unit suites (hermetic DB via tests/conftest.py)
+PYTHONPATH=backend python -m pytest tests -q
+
+# Frontend: type check, lint, unit tests, bundle
 cd frontend
 npm run type-check
 npm run lint        # errors fail; warnings are tracked debt
 npm test
+npm run build
 ```
 
 ---
@@ -643,8 +669,8 @@ Nyx is available as a native desktop application via Electron, providing:
 | Feature | Desktop (Electron) | Web (Docker / `uvicorn`) |
 |---------|-------------------|--------------------------|
 | **Transparent Proxy** | ✅ Always | ✅ Always |
-| **ARP Spoofing** | ✅ **When launched as admin** | ❌ Blocked (no privileges) |
-| **DNS Spoofing** | ✅ **When launched as admin** | ❌ Blocked (no privileges) |
+| **ARP Spoofing** | ✅ Elevated at launch (UAC) | ❌ Blocked (no privileges) |
+| **DNS Spoofing** | ✅ Elevated at launch (UAC) | ❌ Blocked (no privileges) |
 | **Forward proxy (regular)** | ✅ Always | ✅ Always |
 | **All tools** (Scanner, Fuzzer, etc.) | ✅ Always | ✅ Always |
 | **Download CA** | ✅ One-click | ✅ `GET /api/ca-certificate` |
@@ -652,7 +678,9 @@ Nyx is available as a native desktop application via Electron, providing:
 > **⚠️ ARP Spoofing requires admin privileges** because it sends raw network packets (via `scapy`). On Windows/Mac/Linux, only admin can create raw sockets.
 >
 > **How to launch with admin:**
-> - **Windows:** Right-click `Nyx.exe` / `Nyx Setup *.exe` → **Run as administrator**
+> - **Windows:** nothing to do — the app manifest requests elevation, so clicking
+>   `Nyx.exe` (or the Start-menu/desktop shortcut) raises the UAC prompt. The
+>   backend it spawns inherits that elevation.
 > - **macOS/Linux:** `sudo /opt/Nyx/nyx-backend` or `sudo npm start` (dev mode)
 >
 > **Transparent proxy is supported on all platforms:**
@@ -692,7 +720,7 @@ The installer will be generated in `desktop/dist/`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite+aiosqlite:///nyx.db` | Database connection string (use `postgresql+asyncpg://...` for PostgreSQL) |
+| `DATABASE_URL` | absolute `sqlite+aiosqlite:///…/nyx.db` | Database connection string. The SQLite path is anchored (`NYX_HOME`, then an existing DB, then the project root), so it no longer depends on the process CWD. Use `postgresql+asyncpg://...` for PostgreSQL |
 | `SECRET_KEY` | auto-generated | Backend secret key for sessions |
 | `DEBUG` | `false` | Enable debug logging |
 | `PROXY_HOST` | `127.0.0.1` | Proxy listen address |
@@ -702,8 +730,39 @@ The installer will be generated in `desktop/dist/`.
 | `MAX_BODY_SIZE_BYTES` | `10485760` | Max request/response body size (10 MB) |
 | `MAX_STORED_REQUESTS` | `100000` | Max intercepted requests kept in DB (0 = unlimited) |
 | `REQUEST_RETENTION_HOURS` | `168` | Hours to keep intercepted requests (7 days) |
-| `NYX_SQLCIPHER_KEY` | *(empty)* | Set to enable SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`) |
+| `NYX_SQLCIPHER_KEY` | *(empty)* | Opt-in SQLCipher AES-256 encryption at-rest (requires `pysqlcipher3`). Empty means the database is stored **in clear** |
+| `API_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra Host header names accepted by the API (loopback plus `test`/`testserver` are always allowed) |
+| `TRUSTED_PROXY_CIDRS` | *(empty)* | Comma-separated reverse-proxy networks allowed to call the API without `X-API-Key` (set by `docker-compose.yml`) |
+| `API_REQUIRE_SESSION_TOKEN` | `false` | Require the per-boot `X-Nyx-Token` on every API call and WebSocket upgrade, even from loopback (on in the packaged desktop build) |
+| `RATE_LIMIT_RPS` | `100` | Sustained API requests per second allowed per remote client IP |
+| `RATE_LIMIT_BURST` | `50` | Instantaneous burst allowance for a remote client (429 beyond it) |
+| `RATE_LIMIT_RPS_LOCAL` | `600` | Same limits for loopback / trusted-proxy callers (the UI, the CLI, endpoint sweeps) |
+| `RATE_LIMIT_BURST_LOCAL` | `300` | Burst allowance for loopback / trusted-proxy callers |
+| `INTERCEPTOR_PAUSE_TTL_SECONDS` | `120` | Auto-resume a paused intercepted flow after this many seconds (0 disables) |
+| `PROXY_NOISE_DOMAINS` | *(empty)* | Comma-separated override of the built-in noise-host list the proxy drops (health checks, OCSP, …) |
 | `LOG_FORMAT` | `text` | Set to `json` for structured JSON logging (useful for ELK/Grafana) |
+
+### API authorization (scope + token)
+
+Two gates apply to anything that generates traffic, both fail-closed:
+
+1. **Engagement scope.** Every endpoint that sends requests on its own —
+   `POST /api/active-scanner/run`, `/api/auto-exploit/verify`,
+   `/api/auto-exploit/execute`, `/api/crawler/start`, `/api/ab-test/run`,
+   `/api/content-discovery/start`, `/api/auth-scan/scan`, `/api/repeater/send` —
+   requires `session_id` in the body. Omitting it is a **400**
+   (`missing_session`/`invalid_session`); a target outside the session's rules or
+   outside the Rules of Engagement is a **403** (`out_of_scope`/`roe`). There is
+   no "no session" mode that skips the scope check.
+2. **Local API token.** With `API_REQUIRE_SESSION_TOKEN=true` (the packaged
+   desktop build), every `/api/` call and the `/ws/traffic` WebSocket must carry
+   the token generated at boot and stored in `NYX_HOME/session.token`: the
+   `X-Nyx-Token` header for HTTP, `?token=` for the socket (browsers cannot set
+   WS headers). Only the CA download/QR/uninstall pages and `/api/mitm/portal*`
+   are exempt, because a target device's browser has to reach them to install or
+   remove the CA. `POST /api/scope/check` takes an optional `session_id` and, when
+   given, answers with that session's rules (plus legacy global rules) instead of
+   every rule in the database.
 
 ### Compliance Reports
 
@@ -726,16 +785,85 @@ GET /api/compliance/full
 GET /api/compliance/status
 ```
 
-### SQLCipher Encryption at-Rest
+### Encryption at-Rest (SQLCipher, opt-in)
 
-Enable AES-256-CBC encryption for the database:
+**Default: the database is NOT encrypted.** `nyx.db` is a plain SQLite file. It
+contains intercepted traffic, including cookies and credentials in request and
+response **bodies** — header redaction covers header names only, it cannot
+redact secrets inside a JSON body or a form post. Full-disk encryption
+(BitLocker/FileVault/LUKS) on the host is therefore a **requirement**, not a
+suggestion; SQLCipher is the per-database alternative:
 
 ```bash
 pip install pysqlcipher3
 export NYX_SQLCIPHER_KEY="your-strong-password"
 ```
 
-The database file (`nyx.db`) is encrypted with the key. Without the key, the file is unreadable. Recommended for: production deployments, compliance (PCI-DSS §3.4, GDPR Art. 32), and shared environments.
+With the key set and `pysqlcipher3` installed, the database is encrypted with
+AES-256-CBC and is unreadable without the key. If the key is set but the driver
+is missing, Nyx logs a warning and **falls back to plaintext** — check the
+startup log before trusting the file. Recommended for: shared machines,
+compliance (PCI-DSS §3.4, GDPR Art. 32), and production deployments.
+
+### Headless CLI (CI)
+
+Run the active checks without the UI, write a JSON report and fail the build
+when a finding reaches the threshold:
+
+```bash
+cd backend
+python nyx_cli.py scan --url https://target.example/ \
+  --fail-on high --out nyx-report.json
+```
+
+Exit codes: `0` clean at/above threshold, `1` threshold met, `2` error.
+Useful flags: `--params id,user_id`, `--checks active_sqli,active_xss`,
+`--depth fast|balanced|deep`, `--timeout 600`.
+
+### Import an API description
+
+An OpenAPI 2.0/3.x document (JSON or YAML) becomes an endpoint inventory
+without a single request being sent:
+
+```bash
+cd backend
+python nyx_cli.py import openapi spec.yaml --out inventory.json
+python nyx_cli.py import openapi spec.yaml --fail-on medium   # CI gate on warnings
+```
+
+A Burp Suite XML item export is read into the same inventory by
+`POST /api/import/burp` (`{"document": "<xml text>"}`): requests are
+deduplicated by method and path, so a history with 400 hits on `/api/users`
+becomes one endpoint, and the captured query parameters are kept. The UI
+(**Import API**) offers both formats side by side.
+
+The same inventory is available over HTTP with `POST /api/import/openapi`
+(`{"document": "<spec text>", "session_id": "<uuid>", "apply_scope": true}`).
+With `apply_scope` each server declared by the document becomes an `include`
+rule in that session, so later probes pass the scope/RoE gate instead of being
+refused. The payload also carries **contract warnings** — operations without a
+security requirement, plaintext servers, parameters without a schema type,
+deprecated operations — so a CI job can fail on them.
+
+### Multi-identity replay (IDOR)
+
+Send the same request as two users and compare what comes back:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/ab-test/run -H 'Content-Type: application/json' -d '{
+  "session_id": "<session-uuid>",
+  "url": "https://target.example/api/items/42",
+  "identity_a": {"name": "alice", "headers": {"Cookie": "session=<alice>"}},
+  "identity_b": {"name": "bob",   "headers": {"Cookie": "session=<bob>"}}
+}'
+```
+
+The reply is a verdict — `suspected_idor`, `isolated`, `review`,
+`unauthenticated_access` or `inconclusive` — with the similarity score, the
+signals behind it and every sample. Per-response tokens (CSRF nonces, long
+ids) are normalised before comparing, so a rotated nonce does not look like an
+isolation. The request goes through the same scope/RoE gate as any other probe.
+The same comparison runs from the **A/B Test** page in the UI.
 
 ### Prometheus Metrics
 
@@ -763,7 +891,9 @@ Output format: `{"ts": "...", "level": "INFO", "logger": "...", "msg": "..."}`
 Nyx supports two proxy modes:
 
 #### Regular Mode (forward proxy — like Burp)
-Configure your browser/device proxy to `PC_IP:8080`. Works everywhere, no admin needed.
+Configure your browser/device proxy to `PC_IP:8080` (or whichever port Nyx
+reports in Settings/Proxy Log — it moves off 8080 when that port is busy).
+Works everywhere, no admin needed.
 
 | Device | Proxy Host | Proxy Port |
 |--------|-----------|------------|
@@ -787,6 +917,14 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
    - **iOS:** Install profile → Settings → General → Profile → Trust
    - **Windows/macOS:** Double-click → Install → Trusted Root Certification Authorities
 
+> Installing the CA on the **operator PC** is optional — it is only needed to
+> browse through Nyx from this machine, and Nyx never installs it automatically.
+> `GET /api/ca/status` reports where it is trusted (per store);
+> `POST /api/ca/remove` removes it and **verifies** the stores afterwards,
+> answering `removed: false` if a certificate is still trusted (removing from
+> `LocalMachine` needs an elevated Nyx). Firefox's own NSS store and Java
+> keystores are separate and are not touched.
+
 ---
 
 ## Development
@@ -794,22 +932,37 @@ To intercept HTTPS, install the Nyx CA certificate on the target device:
 ### Running Tests
 
 ```bash
-# Backend tests (900+ tests covering all modules)
+# Full backend suite (~1350 tests: modules, API contracts, scanners)
 cd backend
-python -m pytest tests/ -v --asyncio-mode=auto
+python -m pytest -q
 
 # Run specific test suite
-python -m pytest tests/test_interceptor_api.py -v --asyncio-mode=auto
-python -m pytest tests/test_repeater.py -v --asyncio-mode=auto
-python -m pytest tests/test_mitm.py -v --asyncio-mode=auto
+python -m pytest tests/test_interceptor_api.py -v
+python -m pytest tests/test_repeater.py -v
+python -m pytest tests/test_mitm.py -v
 
-# Frontend type check
+# Legacy suites at the repository root
+PYTHONPATH=backend python -m pytest tests -q
+
+# Frontend: type check, unit tests, build
 cd frontend
 npx tsc --noEmit
-
-# Frontend build
-cd frontend
+npm test
 npm run build
+```
+
+### Live end-to-end checks
+
+`backend/tests/test_api_route_contracts.py` walks every GET endpoint through
+ASGI and fails on any 500. For a running instance (Electron or `uvicorn`), the
+scripts in `.live_test/` exercise real traffic, writes and full flows:
+
+```bash
+python .live_test/build_matrix.py   # coverage matrix -> docs/NYX_TEST_MATRIX.md
+python .live_test/endpoint_sweep.py # read endpoints, flags 5xx
+python .live_test/write_sweep.py    # write endpoints, flags 5xx
+python .live_test/e2e_flows.py      # 17 cross-module flows via the proxy
+npx electron .live_test/browser_smoke.js  # integrated browser smoke test
 ```
 
 ### Project Structure
@@ -834,7 +987,7 @@ nyx/
 │   └── webhook/             # Slack/Discord/custom webhook forwarding
 ├── native/                  # C++ native modules
 │   └── grpc_parser/         # gRPC protobuf frame parser (pybind11 bindings)
-├── docs/                    # User guide, test guide, report docs
+├── docs/                    # User guide, test guide, coverage matrix, review
 ├── .github/workflows/       # CI/CD: build & test on push, release on tag
 ├── .dockerignore            # Docker build exclusions
 ├── docker-compose.yml       # Production deployment (PostgreSQL + nginx)
@@ -842,6 +995,19 @@ nyx/
 ```
 
 ---
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/NYX_USER_GUIDE.md`](docs/NYX_USER_GUIDE.md) | Install, first scan, each tab explained |
+| [`docs/NYX_TEST_GUIDE.md`](docs/NYX_TEST_GUIDE.md) | How to test the build end to end |
+| [`docs/NYX_TEST_MATRIX.md`](docs/NYX_TEST_MATRIX.md) | Generated API coverage matrix (endpoint × test × live status) |
+| [`docs/NYX_REVIEW_v1.0.0.md`](docs/NYX_REVIEW_v1.0.0.md) | Security/code review, findings and roadmap |
+| [`docs/threat-model.md`](docs/threat-model.md) | Assets, trust boundaries, threats |
+| [`SECURITY.md`](SECURITY.md) | Vulnerability disclosure, scope, safe defaults |
+
+`docs/NYX_REPORT.md` is a historical snapshot of the 0.1.x architecture.
 
 ## License
 

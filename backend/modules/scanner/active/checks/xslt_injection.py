@@ -1,7 +1,7 @@
 import copy
 import re
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class XsltInjectionCheck(BaseCheck):
@@ -15,7 +15,7 @@ class XsltInjectionCheck(BaseCheck):
         ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload in payloads:
+                for payload in cap_payloads(payloads):
                     modified = self._inject_payload(base_request, param, payload)
                     try:
                         resp = await client.request(**modified)
@@ -30,6 +30,7 @@ class XsltInjectionCheck(BaseCheck):
                                     evidence=f"Indicator: {indicator}\nResponse snippet: {resp.text[:200]}",
                                     remediation="Disable XSLT processing of user-supplied stylesheets. Use parameterised XSLT transformation.",
                                     cwe="CWE-91",
+                                    param=param,
                                 ))
                                 break
                     except Exception:

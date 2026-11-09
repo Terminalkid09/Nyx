@@ -20,6 +20,7 @@ class HttpParamPollutionCheck(BaseCheck):
                         evidence=f"Parameter: {param}\nStatus: {resp.status_code}",
                         remediation="Use the first or last value consistently. Reject duplicate parameters if not expected.",
                         cwe="CWE-235",
+                        param=param,
                     ))
                 except Exception:
                     continue

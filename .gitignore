@@ -56,6 +56,7 @@ startup.err
 # Packet-capture runtime output (real traffic — never commit)
 *.pcap
 *.pcapng
+captures/
 backend/captures/
 backend/stats/
 
@@ -87,10 +88,13 @@ desktop/backend/
 desktop/package.bak.json
 
 # Electron installer outputs
+# NOTE: this used to be a bare ``*.yml``, which silently ignored every future
+# workflow, compose file or CI config in the repository. Scope it to the
+# electron-builder output directory instead.
 desktop/dist_n*/
+desktop/*.yml
+desktop/latest*.yml
 *.blockmap
-*.yml
-!desktop/nyx-backend.spec
 
 # Frontend dist (root level — not desktop/dist)
 frontend/dist/
@@ -98,10 +102,6 @@ frontend/dist/
 # Nyx runtime
 test_stdout.log
 test_stderr.log
-*.nyx
-*.bloom
-startup.log
-startup.err
 
 # Database backups
 *.db.bak
@@ -145,12 +145,16 @@ tests/__pycache__/
 # Local build output (root dist/ + versioned installer copies)
 /dist/
 /dist-v*/
-test_stdout.log
-test_stderr.log
 
 # GitHub Actions
 !.github/
 
-# Freebuff client metadata
+# Freebuff client metadata and exported chats
 .freebuff/
+freebuff-chat-*.md
 
+
+# Live-test scratch data (isolated databases, session tokens, generated TLS)
+.live_test/live_run/
+.live_test/tls/
+# Freebuff client metadata

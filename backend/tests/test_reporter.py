@@ -80,13 +80,19 @@ class TestReporterService:
         assert "|" in md
 
     @pytest.mark.asyncio
-    async def test_generate_pdf_fallback_to_html(self, reporter, sample_findings):
+    async def test_generate_pdf_without_weasyprint_raises(self, reporter, sample_findings):
+        """PDF must fail loudly, not return HTML labelled as application/pdf.
+
+        The old fallback wrote HTML bytes into a .pdf download, so the file
+        never opened in a PDF reader.
+        """
         sid = uuid.uuid4()
-        fake_mod = types.ModuleType("weasyprint")
-        with patch.dict(sys.modules, {"weasyprint": fake_mod}):
-            result = await reporter.generate(session_id=sid, findings=sample_findings, request_count=10, format="pdf")
-        html = result.decode()
-        assert "<!DOCTYPE html>" in html
+        with patch.dict(sys.modules, {"weasyprint": None}):
+            with pytest.raises(ValueError, match="weasyprint"):
+                await reporter.generate(
+                    session_id=sid, findings=sample_findings,
+                    request_count=10, format="pdf",
+                )
 
     @pytest.mark.asyncio
     async def test_generate_empty_findings(self, reporter):

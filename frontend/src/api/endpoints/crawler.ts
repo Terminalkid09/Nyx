@@ -13,6 +13,7 @@ export interface CrawlJob {
 
 export async function startCrawl(config: {
   start_url: string
+  session_id: string
   max_depth?: number
   max_pages?: number
   scope_include?: string[]

@@ -3,8 +3,49 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const os = require('os');
+
+// Ports are chosen before the backend starts, because a busy 8000/8080 is the
+// normal case on a developer machine (dev servers, another tool) and the app
+// must not refuse to open. The values are passed to the backend through the
+// environment and used for every URL the shell builds.
+let apiPort = 8000;
+let proxyPort = 8080;
+
+function canListen(port, host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen(port, host, () => server.close(() => resolve(true)));
+  });
+}
+
+// Windows lets a bind succeed on a port another process holds on a *different*
+// address (0.0.0.0 vs 127.0.0.1) with SO_REUSEADDR, so probing one address is
+// not enough: the backend binds the wildcard and would land on another port
+// than the one every URL in the shell uses. Both must be free.
+async function isPortFree(port) {
+  return (await canListen(port, '0.0.0.0')) && (await canListen(port, '127.0.0.1'));
+}
+
+async function findFreePort(start, attempts = 50) {
+  for (let port = start; port <= start + attempts && port <= 65535; port += 1) {
+    if (await isPortFree(port)) return port;
+  }
+  return start;
+}
+
+async function choosePorts() {
+  const wantedApi = parseInt(process.env.NYX_API_PORT || '8000', 10);
+  const wantedProxy = parseInt(process.env.NYX_PROXY_PORT || '8080', 10);
+  apiPort = await findFreePort(Number.isFinite(wantedApi) ? wantedApi : 8000);
+  proxyPort = await findFreePort(Number.isFinite(wantedProxy) ? wantedProxy : 8080);
+  if (apiPort !== wantedApi) console.log(`[nyx] API port ${wantedApi} busy -> ${apiPort}`);
+  if (proxyPort !== wantedProxy) console.log(`[nyx] proxy port ${wantedProxy} busy -> ${proxyPort}`);
+}
 
 const PID_FILE = path.join(os.tmpdir(), 'nyx-backend.pid');
 const COLLAB_PID_FILE = path.join(os.tmpdir(), 'nyx-collaborator.pid');
@@ -16,6 +57,9 @@ autoUpdater.autoInstallOnAppQuit = true;
 let backendProcess = null;
 let mainWindow = null;
 let loadingWindow = null;
+// Last proxy/capture state read when the browsing window opened; the renderer
+// pulls it through the browser-preload bridge.
+let browserProxyState = { capture: false, tlsMitm: true };
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
@@ -68,7 +112,7 @@ function getBackendArgs() {
   if (app.isPackaged) {
     return [];
   }
-  return ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'];
+  return ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(apiPort)];
 }
 
 function killProcessTree(pid) {
@@ -130,9 +174,18 @@ function startBackend() {
     DATABASE_URL: process.env.DATABASE_URL || `sqlite+aiosqlite:///${path.join(nyxHome, 'nyx.db').replace(/\\/g, '/')}`,
     SECRET_KEY: process.env.SECRET_KEY || require('crypto').randomBytes(32).toString('hex'),
     NYX_HOME: nyxHome,
+    API_PORT: String(apiPort),
+    PROXY_PORT: String(proxyPort),
   };
   if (app.isPackaged && fs.existsSync(frontendDist)) {
     env.NYX_FRONTEND_DIST = frontendDist;
+  }
+  // SEC-03b: any local process can reach 127.0.0.1:8000. In a packaged build
+  // the backend also demands the per-boot token that only this shell (which
+  // can read NYX_HOME) knows about. Dev mode stays open so `npm run dev` in a
+  // plain browser keeps working without the preload bridge.
+  if (app.isPackaged) {
+    env.API_REQUIRE_SESSION_TOKEN = '1';
   }
 
   backendProcess = spawn(execPath, execArgs, {
@@ -161,10 +214,14 @@ function startBackend() {
     if (backendLogStream) { try { backendLogStream.end(); } catch {} backendLogStream = null; }
     if (code !== 0 && code !== null && !backendProcess.killed) {
       const detail = lastStderr.trim().slice(-200);
+      // showErrorBox is synchronous and returns undefined: chaining .then()
+      // on it threw inside the exit handler, so the dialog appeared but the
+      // app never quit and the window sat on a dead backend.
       dialog.showErrorBox(
         'Backend Error',
         `Nyx backend stopped unexpectedly (code ${code}).\n\nLog: ${logPath}\n\nLast error:\n${detail || '(no stderr output)'}`
-      ).then(() => app.quit());
+      );
+      app.quit();
     }
   });
   backendProcess.on('close', () => {
@@ -187,7 +244,7 @@ function stopBackend() {
   //    taskkill /F would skip FastAPI's teardown and leave the OS dirty.
   try {
     require('child_process').execSync(
-      'curl -s -m 2 -X POST http://127.0.0.1:8000/api/shutdown',
+      `curl -s -m 2 -X POST http://127.0.0.1:${apiPort}/api/shutdown`,
       { stdio: 'ignore', timeout: 2500 }
     );
   } catch {}
@@ -230,7 +287,7 @@ function startCollaborator() {
     COLLAB_HTTP_PORT: '9999',
     COLLAB_DNS_PORT: '53',
     COLLAB_API_PORT: '9090',
-    COLLAB_WEBHOOK_URL: 'http://localhost:8000/api/collaborator/interactions',
+    COLLAB_WEBHOOK_URL: `http://localhost:${apiPort}/api/collaborator/interactions`,
   };
 
   collaboratorProcess = spawn(execPath, [], {
@@ -263,7 +320,7 @@ function pollHealth(retries = 90) {
   return new Promise((resolve, reject) => {
     const attempt = (n) => {
       if (n <= 0) return reject(new Error('Backend did not start in time'));
-      const req = http.get('http://127.0.0.1:8000/health', (res) => {
+      const req = http.get(`http://127.0.0.1:${apiPort}/health`, (res) => {
         if (res.statusCode === 200) return resolve();
         setTimeout(() => attempt(n - 1), 1000);
       });
@@ -337,7 +394,7 @@ function showLoading() {
     <div style="width:160px;height:2px;background:#1f2937;border-radius:2px;overflow:hidden">
       <div style="width:30%;height:100%;background:#f59e0b;border-radius:2px;animation:load 1.5s ease-in-out infinite"></div>
     </div>
-    <div style="font-size:11px;color:#6b7280;margin-top:8px" id="substatus">v1.0.0</div>
+    <div style="font-size:11px;color:#6b7280;margin-top:8px" id="substatus">v${app.getVersion()}</div>
     <style>@keyframes load { 50% { width:80%; } }</style></body></html>`
   )}`);
   loadingWindow.on('closed', () => { loadingWindow = null; });
@@ -365,7 +422,7 @@ function createMainWindow() {
 
   trackWindowState(mainWindow);
 
-  mainWindow.loadURL('http://127.0.0.1:8000');
+  mainWindow.loadURL(`http://127.0.0.1:${apiPort}`);
 
   mainWindow.once('ready-to-show', () => {
     if (loadingWindow) { loadingWindow.close(); loadingWindow = null; }
@@ -432,12 +489,21 @@ async function launchBrowser() {
     }
   });
 
+  // A browsing window pointed at untrusted sites must not hand out device
+  // permissions. Electron's default is to grant them, which let any page
+  // opened here use the camera/mic/geolocation. Fullscreen is the only
+  // permission a test target plausibly needs.
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'fullscreen');
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => permission === 'fullscreen');
+
   // Check if proxy capture is active
   let useProxy = false;
   let tlsMitm = true; // TLS MITM forced (CA trusted) — decrypt HTTPS
   try {
     const resp = await new Promise((resolve, reject) => {
-      const req = http.get('http://127.0.0.1:8000/api/proxy/capture', { timeout: 3000 }, (res) => {
+      const req = http.get(`http://127.0.0.1:${apiPort}/api/proxy/capture`, { timeout: 3000 }, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
@@ -452,6 +518,9 @@ async function launchBrowser() {
   } catch (err) {
     console.error('Failed to check proxy capture status:', err);
   }
+  // Read by the renderer so the toolbar reports the real state instead of a
+  // hard-coded "PROXIED" badge.
+  browserProxyState = { capture: useProxy, tlsMitm, proxyPort };
 
   if (useProxy) {
     try {
@@ -460,8 +529,8 @@ async function launchBrowser() {
       // must NOT force TLS MITM: route only http through the proxy and let
       // https go direct — otherwise every HTTPS page throws a cert alert.
       const rules = tlsMitm
-        ? 'http=127.0.0.1:8080;https=127.0.0.1:8080'
-        : 'http=127.0.0.1:8080';
+        ? `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`
+        : `http=127.0.0.1:${proxyPort}`;
       await ses.setProxy({
         proxyRules: rules,
         proxyBypassRules: '<local>',
@@ -488,16 +557,48 @@ async function launchBrowser() {
       contextIsolation: true,
       sandbox: true,
       webviewTag: true,
+      preload: path.join(__dirname, 'browser-preload.js'),
     },
+  });
+
+  // The window itself is local chrome: it never navigates anywhere else.
+  browserWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  browserWin.webContents.on('will-navigate', (event) => {
+    // loadFile() is the only legitimate navigation of the chrome page.
+    event.preventDefault();
+  });
+
+  // Harden the embedded page: no node, no preload, and only http(s) under it.
+  browserWin.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    if (!/^https?:\/\//i.test(params.src || '')) {
+      event.preventDefault();
+    }
+  });
+
+  browserWin.webContents.on('did-attach-webview', (_event, guest) => {
+    // Target pages must not open windows or leave http(s). A window.open()
+    // popup used to inherit this partition and render attacker content
+    // outside every guard above.
+    guest.setWindowOpenHandler(() => ({ action: 'deny' }));
+    guest.on('will-navigate', (event, url) => {
+      if (!/^https?:\/\//i.test(url)) event.preventDefault();
+    });
   });
 
   const browserPage = path.join(__dirname, 'browser.html');
   browserWin.loadFile(browserPage);
+  browserWin.webContents.on('did-finish-load', () => {
+    browserWin.webContents.send('browser-proxy-state', browserProxyState);
+  });
 }
 
 function toggleProxyCapture(active) {
   const postData = JSON.stringify({ active });
-  const req = http.request('http://127.0.0.1:8000/api/proxy/capture', {
+  const req = http.request(`http://127.0.0.1:${apiPort}/api/proxy/capture`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
     timeout: 3000,
@@ -507,7 +608,7 @@ function toggleProxyCapture(active) {
 }
 
 function downloadCA() {
-  http.get('http://127.0.0.1:8000/api/ca-certificate', (res) => {
+  http.get(`http://127.0.0.1:${apiPort}/api/ca-certificate`, (res) => {
     if (res.statusCode !== 200) return;
     const filePath = path.join(app.getPath('downloads'), 'mitmproxy-ca-cert.pem');
     const file = fs.createWriteStream(filePath);
@@ -517,6 +618,7 @@ function downloadCA() {
 
 app.whenReady().then(async () => {
   killOrphanBackends();
+  await choosePorts();
   showLoading();
   startBackend();
   startCollaborator();
@@ -545,6 +647,8 @@ ipcMain.on('toggle-proxy-capture', (_event, active) => toggleProxyCapture(active
 // The backend persists its API key to nyx.secret under NYX_HOME on first
 // boot. Expose it to the renderer so API calls can carry X-API-Key (needed
 // as soon as the API is ever bound beyond localhost).
+ipcMain.handle('browser-proxy-state', () => browserProxyState);
+
 ipcMain.handle('get-api-key', () => {
   try {
     const secretPath = path.join(app.getPath('userData'), 'data', 'nyx.secret');
@@ -553,6 +657,20 @@ ipcMain.handle('get-api-key', () => {
       if (typeof data.api_key === 'string' && data.api_key.length >= 16) {
         return data.api_key;
       }
+    }
+  } catch {}
+  return null;
+});
+
+// SEC-03b: the backend regenerates this token on every boot, so read it from
+// disk instead of caching it here — a stale value after a backend restart
+// would make every request 403.
+ipcMain.handle('get-session-token', () => {
+  try {
+    const tokenPath = path.join(app.getPath('userData'), 'data', 'session.token');
+    if (fs.existsSync(tokenPath)) {
+      const token = fs.readFileSync(tokenPath, 'utf8').trim();
+      if (token.length >= 16) return token;
     }
   } catch {}
   return null;

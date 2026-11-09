@@ -1,5 +1,6 @@
 import difflib
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,8 @@ class ComparerResponse(BaseModel):
     right_content: str | None
     left_label: str | None
     right_label: str | None
-    created_at: str
+    # ORM datetime, not str: see target_scope.RuleResponse.
+    created_at: datetime
     notes: str | None
 
     model_config = {"from_attributes": True}

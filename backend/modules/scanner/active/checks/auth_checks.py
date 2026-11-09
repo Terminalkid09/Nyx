@@ -66,6 +66,7 @@ class ActiveAuthIdorCheck(BaseCheck):
                                 evidence=f"Param: {param}, Value: {test_id}, Status: {resp.status_code}",
                                 remediation="Implement proper access control checks for every object reference.",
                                 cwe="CWE-639",
+                                param=param,
                             ))
                             break
                     except Exception:

@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlparse, urljoin
 
+from core.authorization import authorize
 from core.events.bus import EventBus
+from core.roe import pace
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +80,31 @@ class CrawlerService:
         headers: Optional[dict[str, str]] = None,
         respect_robots_txt: bool = True,
         job_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> dict:
         job_id = job_id or str(uuid.uuid4())
         self._stop_flag[job_id] = False
+
+        # The crawler issues hundreds of requests on its own: it must pass the
+        # same authorization gate as every other active component.
+        allowed, kind, detail = await authorize(session_id, start_url)
+        if not allowed:
+            await self.event_bus.publish({
+                "type": "crawl.blocked",
+                "job_id": job_id,
+                "start_url": start_url,
+                "reason": kind,
+                "rule": detail,
+            })
+            return {
+                "job_id": job_id,
+                "start_url": start_url,
+                "status": "blocked",
+                "pages_visited": 0,
+                "discovered_urls": [],
+                "forms_found": [],
+                "error": f"Target not authorized ({kind}: {detail})",
+            }
 
         include = scope_include or []
         exclude = scope_exclude or []
@@ -100,11 +124,11 @@ class CrawlerService:
 
         disallowed_prefixes: list[str] = []
         if respect_robots_txt:
-            disallowed_prefixes = await self._fetch_robots_txt(start_url)
+            disallowed_prefixes = await self._fetch_robots_txt(start_url, session_id)
 
         sitemap_urls: list[str] = []
         if extract_sitemap:
-            sitemap_urls = await self._fetch_sitemap(start_url)
+            sitemap_urls = await self._fetch_sitemap(start_url, session_id)
             for su in sitemap_urls:
                 if su not in visited:
                     queue.append((su, 0))
@@ -116,6 +140,7 @@ class CrawlerService:
             result = await self._fallback_bfs(
                 start_url, base_domain, max_depth, max_pages,
                 include, exclude, disallowed_prefixes,
+                session_id=session_id, job_id=job_id,
             )
             return {
                 "job_id": job_id,
@@ -177,6 +202,27 @@ class CrawlerService:
                         return
                     if disallowed_prefixes and self._is_disallowed(url, disallowed_prefixes):
                         return
+
+                    # Scope and RoE are checked for every discovered page, not
+                    # only for the start URL: a link can point at an excluded
+                    # path or at a profile whose window has since expired.
+                    allowed, kind, detail = await authorize(session_id, url)
+                    if not allowed:
+                        logger.info(
+                            "Crawler refused %s (%s: %s)", url, kind, detail
+                        )
+                        await self.event_bus.publish({
+                            "type": "crawl.blocked",
+                            "job_id": job_id,
+                            "url": url,
+                            "reason": kind,
+                            "rule": detail,
+                        })
+                        return
+                    try:
+                        await pace(url)
+                    except Exception:
+                        logger.debug("RoE pacing lookup failed", exc_info=True)
 
                     visited.add(url)
 
@@ -291,11 +337,20 @@ class CrawlerService:
 
         return result
 
-    async def _fetch_robots_txt(self, start_url: str) -> list[str]:
+    async def _fetch_robots_txt(
+        self, start_url: str, session_id: str | None = None
+    ) -> list[str]:
         try:
             import httpx
             parsed = urlparse(start_url)
             robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            allowed, kind, detail = await authorize(session_id, robots_url)
+            if not allowed:
+                logger.info(
+                    "Crawler refused robots.txt (%s: %s)", kind, detail
+                )
+                return []
+            await pace(robots_url)
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(robots_url)
                 if resp.status_code == 200:
@@ -314,13 +369,22 @@ class CrawlerService:
                     disallowed.append(path)
         return disallowed
 
-    async def _fetch_sitemap(self, start_url: str) -> list[str]:
+    async def _fetch_sitemap(
+        self, start_url: str, session_id: str | None = None
+    ) -> list[str]:
         urls = []
         try:
             import httpx
             from xml.etree import ElementTree
             parsed = urlparse(start_url)
             sitemap_url = f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
+            allowed, kind, detail = await authorize(session_id, sitemap_url)
+            if not allowed:
+                logger.info(
+                    "Crawler refused sitemap.xml (%s: %s)", kind, detail
+                )
+                return []
+            await pace(sitemap_url)
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(sitemap_url)
                 if resp.status_code == 200:
@@ -656,6 +720,8 @@ class CrawlerService:
         include: list[str],
         exclude: list[str],
         disallowed_prefixes: list[str],
+        session_id: str | None = None,
+        job_id: str | None = None,
     ) -> list[str]:
         visited: set[str] = set()
         queue: list[tuple[str, int]] = [(start_url, 0)]
@@ -674,6 +740,24 @@ class CrawlerService:
 
                     if disallowed_prefixes and self._is_disallowed(url, disallowed_prefixes):
                         continue
+
+                    allowed, kind, detail = await authorize(session_id, url)
+                    if not allowed:
+                        logger.info(
+                            "Crawler refused %s (%s: %s)", url, kind, detail
+                        )
+                        await self.event_bus.publish({
+                            "type": "crawl.blocked",
+                            "job_id": job_id,
+                            "url": url,
+                            "reason": kind,
+                            "rule": detail,
+                        })
+                        continue
+                    try:
+                        await pace(url)
+                    except Exception:
+                        logger.debug("RoE pacing lookup failed", exc_info=True)
 
                     visited.add(url)
 

@@ -26,6 +26,7 @@ class ActiveHeaderInjectionCheck(BaseCheck):
                             evidence=f"Payload: test\\r\\nX-Injected: true\nInjected header found in response.",
                             remediation="Encode or strip CRLF characters from user input before including in headers.",
                             cwe="CWE-113",
+                            param=param,
                         ))
                 except Exception:
                     continue

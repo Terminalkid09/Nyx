@@ -4,6 +4,7 @@ import logging
 from typing import TYPE_CHECKING
 from mitmproxy import http
 
+from core.config import settings
 from core.utils.text import safe_decode
 
 if TYPE_CHECKING:
@@ -21,6 +22,20 @@ NOISE_DOMAINS = {
     "msftncsi.com", "www.msftncsi.com",
     "crl.microsoft.com", "crl3.digicert.com", "crl4.digicert.com",
 }
+
+def noise_domains() -> set[str]:
+    """Noise hosts, overridable with PROXY_NOISE_DOMAINS."""
+    configured = {
+        d.strip().lower()
+        for d in (settings.PROXY_NOISE_DOMAINS or "").split(",")
+        if d.strip()
+    }
+    return configured or NOISE_DOMAINS
+
+
+# Logged once per domain: the old code dropped github.com and friends in total
+# silence, which looks like "the proxy missed the request" (BUG-10).
+_NOISE_LOGGED: set[str] = set()
 
 NOISE_PATHS = {
     "/success.txt", "/connecttest.txt", "/ncsi.txt", "/generate_204",
@@ -63,12 +78,27 @@ class LoggerAddon:
 
     def _is_noise(self, flow: http.HTTPFlow) -> bool:
         host = flow.request.pretty_host.lower()
-        if any(noise in host for noise in NOISE_DOMAINS):
-            return True
-        for p in NOISE_PATHS:
-            if flow.request.path.rstrip("/") == p or flow.request.path.startswith(p + "?"):
-                return True
-        return False
+        reason = None
+        for noise in noise_domains():
+            if noise in host:
+                reason = noise
+                if noise not in _NOISE_LOGGED:
+                    _NOISE_LOGGED.add(noise)
+                    logger.info(
+                        "Proxy: dropping traffic for noise domain %s "
+                        "(override with PROXY_NOISE_DOMAINS)", noise,
+                    )
+                break
+        if reason is None:
+            for p in NOISE_PATHS:
+                if flow.request.path.rstrip("/") == p or flow.request.path.startswith(p + "?"):
+                    reason = p
+                    break
+        if reason is None:
+            return False
+        from core.metrics import registry as _metrics
+        _metrics.inc("proxy_noise_dropped_total")
+        return True
 
     def request(self, flow: http.HTTPFlow):
         if self._is_self_traffic(flow):

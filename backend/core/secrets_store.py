@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import secrets
+import subprocess
 import threading
 from pathlib import Path
 
@@ -42,9 +43,32 @@ def _read_all() -> dict:
 def _write_all(data: dict) -> None:
     try:
         SECRET_FILE.write_text(json.dumps(data, indent=2))
-        os.chmod(str(SECRET_FILE), 0o600)
+        restrict_to_owner(SECRET_FILE)
     except Exception as e:
         logger.warning("Could not persist secrets to %s: %s", SECRET_FILE, e)
+
+
+def restrict_to_owner(path: Path) -> None:
+    """Best-effort owner-only permissions on the secrets file.
+
+    ``chmod`` is a no-op on Windows (BUG-14): the file kept inheriting the
+    directory ACL, so any local account that could read the folder could read
+    the API key. Use icacls there.
+    """
+    try:
+        if os.name == "nt":
+            user = os.environ.get("USERNAME")
+            if not user:
+                return
+            subprocess.run(
+                ["icacls", str(path), "/inheritance:r",
+                 "/grant:r", f"{user}:F"],
+                shell=False, capture_output=True, timeout=10,
+            )
+        else:
+            os.chmod(str(path), 0o600)
+    except Exception as exc:
+        logger.warning("Could not restrict permissions on %s: %s", path, exc)
 
 
 def get_or_create(name: str, generator) -> str:

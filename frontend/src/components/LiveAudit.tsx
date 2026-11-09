@@ -15,7 +15,6 @@ interface AuditStatus {
     passive_scan: boolean
     active_scan: boolean
     param_discovery: boolean
-    fuzz_discovered: boolean
     max_concurrent_audits: number
     scope_only: boolean
     throttle_ms: number
@@ -318,15 +317,6 @@ export function LiveAudit() {
                     className="accent-purple-500"
                   />
                   Param Discovery
-                </label>
-                <label className="flex items-center gap-2 text-xs text-gray-400">
-                  <input
-                    type="checkbox"
-                    checked={config.fuzz_discovered}
-                    onChange={(e) => handleConfigUpdate('fuzz_discovered', e.target.checked)}
-                    className="accent-purple-500"
-                  />
-                  Fuzz Discovered
                 </label>
                 <label className="flex items-center gap-2 text-xs text-gray-400">
                   <input

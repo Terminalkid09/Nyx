@@ -1,18 +1,15 @@
 import asyncio
 import ipaddress as _ipaddress
 import logging
-import os
 import platform
-import subprocess
 import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from core.proxy.engine import (
     ProxyEngine,
-    setup_transparent_redirect,
     start_transparent_transport,
     stop_transparent_transport,
     windivert_last_error,
@@ -36,8 +33,15 @@ from modules.arp_spoof import ARPSpoofer, _get_local_ip, _get_mac, _get_hostname
 from modules.dns_spoof import DNSSpoofer
 from modules.dhcp_spoof import DHCPSpoofer, detect_subnet_mask
 from modules.ndp_spoof import NDPSpoofer, is_ipv6
+from modules.mitm_admin import (
+    ensure_windows_firewall as _ensure_windows_firewall,
+    exec_admin_redirect as _exec_admin_redirect,
+    is_admin as _is_admin,
+    probe_target_reachability as _probe_target_reachability,
+    remove_windows_firewall as _remove_windows_firewall,
+)
 from modules.vendor_lookup import lookup_vendor_async
-from modules.ca_portal import DEFAULT_PORT as CA_PORTAL_PORT
+from modules.ca_portal import active_port as ca_portal_active_port
 from core.storage.traffic import MITM_SESSION_ID
 
 logger = logging.getLogger(__name__)
@@ -137,148 +141,6 @@ async def shutdown_mitm():
     logger.info("MITM resources released")
 
 
-def _is_admin() -> bool:
-    try:
-        if platform.system().lower() == "windows":
-            import ctypes
-            return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        return os.geteuid() == 0
-    except Exception as e:
-        logger.warning("Failed to check admin status: %s", e)
-        return False
-
-
-def _ensure_windows_firewall(port: int, protocol: str = "TCP", rule_prefix: str = "Nyx Proxy") -> bool:
-    """Open a port for LAN devices if Windows Firewall would block it.
-
-    Windows Firewall silently drops inbound connections on public/private
-    profiles to ports that aren't explicitly allowed — the #1 reason a phone
-    on the same Wi-Fi "sees" the proxy but nothing is ever intercepted.
-    """
-    if platform.system().lower() != "windows":
-        return True
-    rule_name = f"{rule_prefix} {protocol} {port}"
-    try:
-        check = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={rule_name}"],
-            capture_output=True, text=True, timeout=20,
-        )
-        # Rule may not exist — query by name only finds it if present.
-        if f"Rule Name:\n{rule_name}".replace("\0", "") in check.stdout or rule_name in check.stdout:
-            logger.info("Firewall rule '%s' already present", rule_name)
-            return True
-        result = subprocess.run(
-            [
-                "netsh", "advfirewall", "firewall", "add", "rule",
-                f"name={rule_name}",
-                "dir=in", "action=allow", "protocol=" + protocol, f"localport={port}",
-                "profile=any", "enable=yes",
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            logger.info("Added firewall rule '%s' (port %d)", rule_name, port)
-            return True
-        logger.warning("Firewall rule failed (rc=%d): %s", result.returncode, result.stderr.strip()[:200])
-        return False
-    except Exception as e:
-        logger.warning("Firewall rule error: %s", e)
-        return False
-
-
-def _remove_windows_firewall(proxy_port: int, protocol: str = "TCP", rule_prefix: str = "Nyx Proxy"):
-    if platform.system().lower() != "windows":
-        return
-    rule_name = f"{rule_prefix} {protocol} {proxy_port}"
-    try:
-        subprocess.run(
-            ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"],
-            capture_output=True, text=True, timeout=20,
-        )
-        logger.info("Removed firewall rule '%s'", rule_name)
-    except Exception as e:
-        logger.warning("Firewall rule removal error: %s", e)
-
-
-def _exec_admin_redirect(proxy_port: int, enable: bool) -> list[str]:
-    cmds = setup_transparent_redirect(proxy_port, enable)
-    if not _is_admin():
-        return cmds
-    executed = []
-    for cmd in cmds:
-        try:
-            sys_platform = platform.system().lower()
-            if sys_platform == "linux" and (cmd.startswith("iptables") or cmd.startswith("sysctl")):
-                subprocess.run(cmd.split(), check=True, capture_output=True)
-                executed.append(cmd)
-            elif sys_platform == "darwin":
-                _exec_darwin_redirect(cmd)
-                executed.append(cmd)
-        except subprocess.CalledProcessError as e:
-            logger.warning("Redirect command failed (may already be set): %s -> %s", cmd, e)
-    return executed
-
-
-def _exec_darwin_redirect(cmd: str) -> None:
-    """Execute a macOS redirect command without shell=True.
-
-    The old code used ``shell=True`` for pipe commands like
-    ``echo 'rule' | pfctl -ef -``. We now pipe the rule text directly into
-    pfctl's stdin via subprocess, which is both injection-safe and shell-free.
-    """
-    if "|" in cmd:
-        # Pipe command: decompose into left (echo/producer) and right (consumer)
-        left_str, right_str = cmd.split("|", 1)
-        left_str = left_str.strip()
-        right_str = right_str.strip()
-        if left_str.startswith("echo "):
-            # ``echo 'rule text'`` → extract the rule and feed it to pfctl stdin
-            rule_text = left_str[5:].strip("\"'")
-            subprocess.run(
-                right_str.split(), input=rule_text.encode(),
-                check=True, capture_output=True,
-            )
-        else:
-            p1 = subprocess.run(left_str.split(), capture_output=True, check=True)
-            subprocess.run(right_str.split(), input=p1.stdout, check=True, capture_output=True)
-    else:
-        subprocess.run(cmd.split(), check=True, capture_output=True)
-
-
-def _probe_one_target(ip: str, timeout: float = 1.0) -> str | None:
-    """Probe a single target; returns the IP if it did NOT respond."""
-    try:
-        if is_ipv6(ip):
-            # IPv6: ICMPv6 echo via scapy (Neighbor Solicitation is
-            # already handled by the NDP spoofer at runtime).
-            from scapy.all import ICMPv6EchoRequest, IPv6, sr1
-            clean = ip.split("%")[0]
-            reply = sr1(IPv6(dst=clean) / ICMPv6EchoRequest(), timeout=timeout, verbose=0)
-            return ip if reply is None else None
-        from scapy.all import ARP, Ether, srp
-        ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip), timeout=timeout, verbose=0)
-        return ip if not ans else None
-    except Exception as e:
-        logger.debug("Reachability probe failed for %s: %s", ip, e)
-        return ip
-
-
-async def _probe_target_reachability(target_ips: list[str]) -> list[str]:
-    """Best-effort client-isolation check (AP isolation / client isolation).
-
-    Probes each target in PARALLEL with ARP who-has (IPv4) or ICMPv6 echo
-    (IPv6); if a target answers none of the probes it may be isolated from us
-    by the AP — which would make ARP/NDP spoofing useless. Returns the list
-    of targets that did NOT respond. False positives are possible (sleeping
-    device, firewall dropping probes), hence the result is surfaced as a
-    warning, not a hard failure.
-    """
-    results = await asyncio.gather(
-        *(asyncio.to_thread(_probe_one_target, ip) for ip in target_ips)
-    )
-    return [ip for ip in results if ip]
-
-
 class MITMStartRequest(BaseModel):
     target_ips: list[str]
     gateway_ip: str | None = None
@@ -299,8 +161,41 @@ class MITMStartRequest(BaseModel):
     # "wifi-ap" turns the machine into a rogue access point: the target
     # connects to us and we ARE the gateway — zero spoofing, zero detection.
     enable_wifi_ap: bool = False
-    wifi_ap_ssid: str = "Nyx"
-    wifi_ap_passphrase: str = "nyxmitm2026"
+    wifi_ap_ssid: str = Field(default="Nyx", min_length=1, max_length=32)
+    wifi_ap_passphrase: str = Field(default="nyxmitm2026", min_length=8, max_length=63)
+    # ``None`` keeps the legacy "serve every client" AP. A non-empty list
+    # turns the AP into a target-scoped one: hostapd gets a MAC ACL and
+    # dnsmasq only leases addresses to those devices. An explicitly empty
+    # list is rejected instead of silently widening the AP.
+    wifi_ap_allowed_macs: list[str] | None = None
+    # SSID/passphrase are interpolated into netsh arguments and hostapd.conf.
+    # Bound them at the API boundary so an authenticated caller cannot inject
+    # shell metacharacters or hostapd directives (SEC-01).
+    @field_validator("wifi_ap_ssid")
+    @classmethod
+    def _validate_ssid(cls, value: str) -> str:
+        from modules.wifi_ap import validate_ssid
+        return validate_ssid(value)
+
+    @field_validator("wifi_ap_passphrase")
+    @classmethod
+    def _validate_passphrase(cls, value: str) -> str:
+        from modules.wifi_ap import validate_passphrase
+        return validate_passphrase(value)
+
+    @field_validator("wifi_ap_allowed_macs")
+    @classmethod
+    def _validate_allowed_macs(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        from modules.wifi_ap import validate_mac_list
+        if not value:
+            raise ValueError(
+                "wifi_ap_allowed_macs must contain at least one MAC address; "
+                "omit it to start an unscoped AP"
+            )
+        return validate_mac_list(value)
+
     # QUIC handling for the targets: "drop" (default) kills their UDP/443 so
     # browsers fall back to interceptable TCP/TLS; "allow" lets QUIC pass
     # through untouched (visible only in the passive network layer).
@@ -548,9 +443,22 @@ async def _mitm_start_locked(req: MITMStartRequest):
 
     admin = _is_admin()
     if not admin:
-        logger.warning("Not running as admin — ARP spoofing and port redirect will fail. Run Nyx as administrator.")
-    else:
-        logger.info("Running with admin privileges")
+        # Refuse up front instead of letting switch_to_transparent() fail with
+        # an opaque 500 ("WinDivert is not available"): interception needs raw
+        # sockets and port redirection, so without elevation the honest answer
+        # is "start Nyx as Administrator, or use Stealth Mode".
+        logger.warning("MITM start refused: not running as administrator/root")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MITM interception requires Administrator (Windows) or root "
+                "(Linux/macOS): raw sockets plus port redirection. Launch Nyx "
+                "elevated, or use Stealth Mode — set the target's proxy to "
+                f"this machine's IP and port {_engine.port if _engine else 8080} "
+                "— which does not need elevated privileges."
+            ),
+        )
+    logger.info("Running with admin privileges")
 
     if _engine.mode != "transparent":
         # switch_to_transparent() stops/restarts the proxy and busy-waits on
@@ -684,11 +592,14 @@ async def _mitm_start_locked(req: MITMStartRequest):
                 wifi_ap_manager = WiFiAPManager(
                     ssid=req.wifi_ap_ssid or "Nyx",
                     passphrase=req.wifi_ap_passphrase or "nyxmitm2026",
+                    allowed_macs=req.wifi_ap_allowed_macs,
                 )
                 ap_result = await wifi_ap_manager.start()
+                # Do not echo the passphrase into warnings: the response is
+                # surfaced in the UI and may be persisted in logs/exports.
                 warnings.append(
                     f"WiFi AP active: connect the target to SSID "
-                    f"'{req.wifi_ap_ssid or 'Nyx'}' (pass: {req.wifi_ap_passphrase or 'nyxmitm2026'}). "
+                    f"'{wifi_ap_manager.ssid}'. "
                     f"{ap_result.get('note', '')}"
                 )
                 _wifi_ap_manager = wifi_ap_manager
@@ -844,7 +755,7 @@ async def _mitm_start_locked(req: MITMStartRequest):
     # reachable from the target device. The portal itself is started at
     # backend startup (always reachable): targets install/remove the CA
     # out-of-band (scan the QR / open the URL from the target device).
-    ca_portal_url = f"http://{local_ip}:{CA_PORTAL_PORT}/" if local_ip and local_ip != "127.0.0.1" else ""
+    ca_portal_url = f"http://{local_ip}:{ca_portal_active_port()}/" if local_ip and local_ip != "127.0.0.1" else ""
 
     # Prometheus metrics
     from core.metrics import registry as _metrics
@@ -971,34 +882,14 @@ async def mitm_stop():
 
 
 def _activity_for_targets(engine) -> list[dict]:
-    """Activity snapshot restricted to the currently selected targets.
+    """Activity snapshot restricted to the targets of THIS session.
 
-    The ActivityTracker records every flow that reaches the proxy, which
-    includes devices with *leftover* ARP caches from previous sessions (their
-    traffic still flows through Nyx even though they are no longer targets).
-    The monitor is labelled "domains contacted by each target", so it should
-    only show the devices the user actually selected.
+    Thin adapter so callers keep one entry point; the filtering itself lives in
+    ``modules.mitm_status`` with the session objects passed explicitly.
     """
-    global _spoofer, _ndp_spoofer, _dhcp_spoofer
-    targets: set[str] = set()
-    if _spoofer is not None:
-        targets.update(getattr(_spoofer, "target_ips", []) or [])
-    if _ndp_spoofer is not None:
-        targets.update(getattr(_ndp_spoofer, "target_ips", []) or [])
-    if _dhcp_spoofer is not None:
-        leases = getattr(_dhcp_spoofer, "granted_leases", []) or []
-        targets.update(l.get("ip") for l in leases if l.get("ip"))
-        # NOTE: DHCP targets are identified by MAC, so until a lease is
-        # granted the monitor stays empty (no IP to match yet) — honest.
-    if engine is None:
-        return []
-    snapshot = engine.activity_snapshot() or []
-    if not targets:
-        return snapshot[:60]
-    filtered = [e for e in snapshot if e.get("ip") in targets]
-    # If every entry was filtered out, the phone is probably on a new DHCP IP
-    # — surface that instead of showing an empty monitor.
-    return filtered[:60]
+    from modules.mitm_status import activity_for_targets
+
+    return activity_for_targets(engine, _spoofer, _ndp_spoofer, _dhcp_spoofer)
 
 
 # ── QUIC + UDP policy control (the WinDivert layer) ──────────────────────────
@@ -1059,135 +950,24 @@ async def clear_udp_policy():
 
 @router.get("/status")
 async def mitm_status():
-    global _spoofer, _dns_spoofer, _ndp_spoofer, _dhcp_spoofer
-    arp_running = _spoofer is not None and getattr(_spoofer, '_running', False)
-    ndp_running = _ndp_spoofer is not None and getattr(_ndp_spoofer, '_running', False)
-    dhcp_running = _dhcp_spoofer is not None
-    dns_running = _dns_spoofer is not None and getattr(_dns_spoofer, '_running', False)
-    # How many requests the proxy has captured during the CURRENT MITM
-    # session (since the last start). The dedicated MITM session accumulates
-    # across runs, so counting its whole history would show old data as
-    # "flows captured" right after a fresh start.
-    proxy_count = 0
-    last_traffic_seen: str | None = None
-    if _engine:
-        try:
-            from sqlalchemy import func, select
-            from core.storage.database import AsyncSessionLocal
-            from core.storage.models import Request
-            from core.storage.traffic import MITM_SESSION_ID
+    """Everything the MITM page polls about the current session."""
+    from modules.mitm_status import build_status
 
-            async with AsyncSessionLocal() as db:
-                query = select(func.count(), func.max(Request.timestamp)).where(
-                    Request.session_id == MITM_SESSION_ID
-                )
-                if _mitm_session_started_ts is not None:
-                    query = query.where(Request.timestamp >= _mitm_session_started_ts)
-                result = await db.execute(query)
-                proxy_count, latest = result.one()
-                if latest is not None:
-                    # SQLite returns naive UTC datetimes — tag them so the
-                    # frontend parses the timestamp correctly.
-                    if latest.tzinfo is None:
-                        latest = latest.replace(tzinfo=timezone.utc)
-                    last_traffic_seen = latest.astimezone(timezone.utc).isoformat()
-        except Exception:
-            proxy_count = 0
-    local_ip = _get_local_ip()
-    transport_ready = bool(_engine and getattr(_engine, "transport_ready", False))
-    # "active" = an interception session is currently running (spoofers live).
-    # This drives the UI's Start/Stop button — the user must always be able to
-    # stop, even if the transport is degraded.
-    session_active = bool(_spoofer is not None or _dns_spoofer is not None or _ndp_spoofer is not None or _dhcp_spoofer is not None)
-    # Seconds until the auto-mode ARP fallback kicks in (None when DHCP is
-    # not waiting on anything: converted, already fell back, or not auto).
-    dhcp_fallback_in: float | None = None
-    if (
-        _dhcp_spoofer is not None
-        and _spoofer is None
-        and _dhcp_spoofer.lease_requests == 0
-        and _dhcp_started_ts is not None
-    ):
-        elapsed = time.time() - _dhcp_started_ts
-        if _dhcp_spoofer.offers_sent == 0:
-            dhcp_fallback_in = max(0.0, _DHCP_FALLBACK_GRACE_NO_DISCOVER - elapsed)
-        else:
-            dhcp_fallback_in = max(0.0, _DHCP_FALLBACK_GRACE_RACE_LOST - elapsed)
-    last_arp_sent: str | None = None
-    if _spoofer is not None and _spoofer.last_send_ts:
-        last_arp_sent = datetime.fromtimestamp(_spoofer.last_send_ts, tz=timezone.utc).isoformat()
-    return {
-        "active": session_active,
-        "transport_ready": transport_ready,
-        "arp_spoofing": arp_running,
-        "ndp_spoofing": ndp_running,
-        "dhcp_spoofing": dhcp_running,
-        "dhcp_offers": _dhcp_spoofer.offers_sent if _dhcp_spoofer else 0,
-        "dhcp_lease_requests": _dhcp_spoofer.lease_requests if _dhcp_spoofer else 0,
-        "dhcp_naks": _dhcp_spoofer.naks_sent if _dhcp_spoofer else 0,
-        "dhcp_granted_ips": [lease["ip"] for lease in _dhcp_spoofer.granted_leases] if _dhcp_spoofer else [],
-        "dhcp_fallback_in": dhcp_fallback_in,
-        "last_arp_sent": last_arp_sent,
-        # How many forwarded packets WinDivert has captured. 0 while ARP is
-        # active means the target's traffic never reached Nyx (AP isolation /
-        # Android self-defence / forwarding off) — nothing can be intercepted.
-        "forwarded_packets": windivert_forwarded_count(),
-        # When the target's traffic reaches Nyx (forwarded packets) but no flow
-        # is ever decrypted, the UI can point at the CA/pinning/QUIC causes
-        # instead of claiming "no traffic seen".
-        "forwarded_last_seen": (
-            datetime.fromtimestamp(windivert_last_forwarded(), tz=timezone.utc).isoformat()
-            if windivert_last_forwarded()
-            else None
-        ),
-        # TLS handshakes the TARGET rejected (CA not trusted): the phone tried
-        # to reach these hosts but aborted before any flow existed. Count +
-        # recent hosts let the UI show "requests" even when no flow decrypts.
-        "tls_handshake_failures": _engine.tls_failures()[0] if _engine else 0,
-        "tls_failed_hosts": _engine.tls_failures()[1] if _engine else [],
-        # CA install page served on the LAN (always reachable — targets
-        # install/remove the CA out-of-band via QR or this URL).
-        "ca_portal_url": (
-            f"http://{local_ip}:{CA_PORTAL_PORT}/"
-            if local_ip and local_ip != "127.0.0.1"
-            else None
-        ),
-        # QUIC/HTTP3 handling: mode (drop/allow) + how many of the targets'
-        # UDP/443 packets were dropped to force fallback to interceptable
-        # TCP/TLS, plus the WinDivert UDP drop/pass policy state.
-        "quic_blocked_packets": quic_dropped_count(),
-        "quic_mode": quic_block_mode(),
-        "udp_policy": udp_policy_status(),
-        # Live per-target activity (SNI + HTTP hosts, most recent first) —
-        # works even when the target has NOT installed the Nyx CA.
-        # Filtered to the *selected* targets: the tracker records every device
-        # whose traffic flows through the proxy (leftover ARP caches from past
-        # sessions included), which made the monitor show unrelated phones.
-        "activity": _activity_for_targets(_engine) if _engine else [],
-        "dns_spoofing": dns_running,
-        "dns_spoof_error": _dns_spoof_error,
-        "target_ips": _spoofer.target_ips if _spoofer else (_ndp_spoofer.target_ips if _ndp_spoofer else []),
-        "gateway_ip": _spoofer.gateway_ip if _spoofer else (_ndp_spoofer.gateway_ip6 if _ndp_spoofer else None),
-        "admin_mode": _is_admin(),
-        "proxy_mode": _engine.mode if _engine else None,
-        "redirect_active": _redirect_active,
-        "captured_flows": proxy_count,
-        # Last time the proxy actually handled a flow — lets the UI warn when
-        # "active" but nothing has flowed for a while (firewall/CA/QUIC/DoH).
-        "last_traffic_seen": last_traffic_seen,
-        # Stealth (manual proxy) helper data — lets the UI show exactly how
-        # to point a target device at Nyx without ARP spoofing.
-        "local_ip": local_ip if local_ip != "127.0.0.1" else None,
-        "proxy_host": _engine.host if _engine else None,
-        "proxy_port": _engine.port if _engine else None,
-        # User-controlled: True = decrypt HTTPS with the Nyx CA (target must
-        # trust the CA via DeployBox); False = HTTPS tunnelled untouched, only
-        # plain HTTP is intercepted. Toggle via POST /api/mitm/tls.
-        "tls_mitm": _engine.tls_mitm if _engine else True,
-        # Target-scoped packet feed (started/stopped with the session).
-        # Wrapped: the feed module may not exist in stripped builds.
-        "packet_feed": _packet_feed_status(),
-    }
+    return await build_status(
+        engine=_engine,
+        spoofer=_spoofer,
+        ndp_spoofer=_ndp_spoofer,
+        dhcp_spoofer=_dhcp_spoofer,
+        dns_spoofer=_dns_spoofer,
+        dns_spoof_error=_dns_spoof_error,
+        redirect_active=_redirect_active,
+        mitm_session_started_ts=_mitm_session_started_ts,
+        dhcp_started_ts=_dhcp_started_ts,
+        dhcp_grace_no_discover=_DHCP_FALLBACK_GRACE_NO_DISCOVER,
+        dhcp_grace_race_lost=_DHCP_FALLBACK_GRACE_RACE_LOST,
+        admin_mode=_is_admin(),
+        local_ip=_get_local_ip(),
+    )
 
 
 def _packet_feed_status() -> dict:

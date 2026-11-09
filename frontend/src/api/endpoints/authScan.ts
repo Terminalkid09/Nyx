@@ -29,7 +29,12 @@ export async function recordLogin(sessionId: string, loginUrl?: string): Promise
   return r.data
 }
 
-export async function runAuthScan(profileId: string, targetUrl: string, params?: string[]): Promise<any> {
-  const r = await apiClient.post('/api/auth/scan', { profile_id: profileId, target_url: targetUrl, params: params || [] })
+export async function runAuthScan(profileId: string, targetUrl: string, sessionId: string, params?: string[]): Promise<any> {
+  const r = await apiClient.post('/api/auth/scan', {
+    profile_id: profileId,
+    target_url: targetUrl,
+    session_id: sessionId,
+    params: params || [],
+  })
   return r.data
 }

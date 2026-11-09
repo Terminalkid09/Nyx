@@ -24,6 +24,7 @@ class ActiveFormActionOverrideCheck(BaseCheck):
                                 evidence=f"Form action: {form_action}\nParam: {param}",
                                 remediation="Validate form action URLs server-side. Do not trust client-supplied form action parameters.",
                                 cwe="CWE-345",
+                                param=param,
                             ))
             except Exception:
                 pass

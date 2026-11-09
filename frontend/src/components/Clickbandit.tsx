@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiClient } from '../api/client'
+import { useSessionStore } from '../store/useSessionStore'
 
 interface Layer {
   url: string
@@ -26,6 +27,10 @@ function emptyLayer(): Layer {
 }
 
 export function Clickbandit() {
+  // Saved configs belong to the session the user is working in, not to the
+  // hard-coded default session (which the UI never shows, so the item looked
+  // like it had vanished after creation).
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [targetUrl, setTargetUrl] = useState('')
   const [configName, setConfigName] = useState('')
   const [layers, setLayers] = useState<Layer[]>([emptyLayer()])
@@ -65,7 +70,7 @@ export function Clickbandit() {
       if (editingId) {
         await apiClient.put(`/api/clickbandit/${editingId}`, { name: configName, target_url: targetUrl, layers, config: {} })
       } else {
-        await apiClient.post('/api/clickbandit/', { session_id: '00000000-0000-0000-0000-000000000001', name: configName, target_url: targetUrl, layers, config: {} })
+        await apiClient.post('/api/clickbandit/', { session_id: activeSessionId, name: configName, target_url: targetUrl, layers, config: {} })
       }
       const { data } = await apiClient.get('/api/clickbandit/')
       setConfigs(data)

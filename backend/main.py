@@ -11,6 +11,7 @@ from core.events.bus import EventBus
 from core.proxy.engine import ProxyEngine
 from core.storage.database import init_db
 from core.storage.traffic import TrafficStorageService, ensure_default_session, DEFAULT_SESSION_ID
+from core.version import VERSION
 from api.websocket.manager import WebSocketManager
 
 # Structured JSON logging (env LOG_FORMAT=json). Plain text by default.
@@ -245,7 +246,7 @@ async def lifespan(app: FastAPI):
     # ── Audit trail ───────────────────────────────────────────────────
     from core.audit import start_audit_trail, log_audit
     start_audit_trail()
-    log_audit(action="nyx.started", detail=f"Version 1.0.0 — proxy {settings.PROXY_HOST}:{settings.PROXY_PORT}")
+    log_audit(action="nyx.started", detail=f"Version {VERSION} — proxy {settings.PROXY_HOST}:{settings.PROXY_PORT}")
     app.state.log_audit = log_audit
 
     scheduled_scan_service = ScheduledScanService(event_bus)
@@ -417,7 +418,11 @@ import signal as _signal
 # without poking the live handler registry (pytest owns SIGINT too).
 _SIGNAL_HANDLERS_REGISTERED: list[str] = []
 
-_atexit.register(_emergency_cleanup)
+# The test suite imports this module, so the *implicit* atexit cleanup used to
+# clear the developer's Windows system proxy on every pytest run. Tests set
+# NYX_SKIP_OS_CLEANUP; explicit calls (shutdown API, signal handler) still run.
+if not os.environ.get("NYX_SKIP_OS_CLEANUP"):
+    _atexit.register(_emergency_cleanup)
 for _sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
     _sig = getattr(_signal, _sig_name, None)
     if _sig is not None:
@@ -481,12 +486,18 @@ async def http_exception_handler(request, exc):
 
 @app.websocket("/ws/traffic")
 async def traffic_websocket(ws: WebSocket):
-    from core.api_auth import validate_ws_origin
+    from core.api_auth import validate_ws_origin, validate_ws_token
 
     if not validate_ws_origin(ws):
-        # Foreign origin (another web page scripting this socket) — refuse the
+        # Foreign origin (another web page scripting this socket) - refuse the
         # upgrade before accepting, so no traffic is ever streamed to it.
         logger.warning("Rejected WebSocket connection from foreign origin: %s", ws.headers.get("origin", ""))
+        await ws.close(code=1008)
+        return
+    if not validate_ws_token(ws):
+        # Token mode: no Origin is not proof of trust. A local process that did
+        # not read NYX_HOME/session.token must not stream captured traffic.
+        logger.warning("Rejected WebSocket connection without a valid session token")
         await ws.close(code=1008)
         return
     if ws_manager:
@@ -517,7 +528,11 @@ from api.routes.comparer import router as comparer_router
 from api.routes.search import router as search_router
 from api.routes.auth_testing import router as auth_testing_router
 from api.routes.websocket_intercept import router as websocket_intercept_router
-from api.routes.plugins import router as plugins_router
+from api.routes.attack_path import router as attack_path_router
+from api.routes.roe import router as roe_router
+from api.routes.verifier import router as verifier_router
+from api.routes.imports import router as imports_router
+from api.routes.ab_test import router as ab_test_router
 from api.routes.projects import router as projects_router
 from api.routes.scan_jobs import router as scan_jobs_router
 from api.routes.automation import router as automation_router
@@ -576,7 +591,11 @@ app.include_router(comparer_router)
 app.include_router(search_router)
 app.include_router(auth_testing_router)
 app.include_router(websocket_intercept_router)
-app.include_router(plugins_router)
+app.include_router(attack_path_router)
+app.include_router(roe_router)
+app.include_router(verifier_router)
+app.include_router(imports_router)
+app.include_router(ab_test_router)
 app.include_router(projects_router)
 app.include_router(scan_jobs_router)
 app.include_router(automation_router)
@@ -614,4 +633,19 @@ if FRONTEND_DIST.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=settings.API_HOST, port=settings.API_PORT)
+
+    # The shell normally picks a free port and passes API_PORT. When the binary
+    # is started directly, a busy 8000 used to abort with a bare "address
+    # already in use"; move to the next free port instead and say where we
+    # ended up.
+    from core.netports import pick_free_port
+
+    _api_port = pick_free_port(settings.API_PORT, host=settings.API_HOST or "127.0.0.1")
+    if _api_port != settings.API_PORT:
+        logger.warning(
+            "API port %d is busy; listening on %d instead",
+            settings.API_PORT,
+            _api_port,
+        )
+        settings.API_PORT = _api_port
+    uvicorn.run(app, host=settings.API_HOST, port=_api_port)
