@@ -42,7 +42,11 @@ a = Analysis(
         [(_asyncpg_pgproto_pyd, "asyncpg/pgproto")] if _asyncpg_pgproto_pyd else []
     ) + _pydivert_binaries,
     datas=[
-        (str(BACKEND / "data"), "data"),
+        # NOTE: backend/data/ is intentionally NOT bundled. It is gitignored
+        # (contains nyx.secret and machine-local state) and every consumer
+        # self-heals it at runtime (mkdir + defaults). Bundling it crashed
+        # PyInstaller on clean checkouts (release CI) and would risk leaking
+        # local secrets into distributed binaries.
         (str(BACKEND / "alembic.ini"), "."),
         (str(BACKEND / "alembic"), "alembic"),
         (str(BACKEND / "wordlists"), "wordlists"),

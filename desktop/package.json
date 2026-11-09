@@ -2,6 +2,7 @@
     "name":  "nyx-desktop",
     "version":  "2.0.0",
     "description":  "Nyx — Security Testing Suite",
+    "homepage": "https://github.com/Terminalkid09/Nyx",
     "main":  "main.js",
     "scripts":  {
                     "start":  "electron .",
@@ -73,11 +74,11 @@
                                            ],
                                 "icon":  "icon.png",
                                 "category":  "Development"
-                            },
-"nsis":  {
-                           "oneClick":  true,
-                           "perMachine":  false,
-                           "allowToChangeInstallationDirectory":  false,
+                            },    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "artifactName": "${productName}-Setup-${version}.${ext}",
                            "installerIcon":  "icon.ico",
                            "uninstallerIcon":  "icon.ico",
                            "createDesktopShortcut":  true,
@@ -96,8 +97,10 @@
                                       "repo":  "nyx"
                                   }
                               ]
-              },
-    "author":  "Nyx Developer",
+              },  "author": {
+    "name": "Nyx Developer",
+    "email": "Terminalkid09@users.noreply.github.com"
+  },
     "license":  "ISC",
     "devDependencies":  {
                             "electron":  "^43.1.1",

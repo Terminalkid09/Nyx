@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual trigger (also used to re-run a release when a tag push gets
+  # swallowed by GitHub's event delivery during rapid delete/re-push churn):
+  # run it against an existing v* tag ref and it rebuilds + re-uploads with
+  # overwrite_files, replacing the assets in place.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -120,18 +125,41 @@ jobs:
 
       - name: Build installer
         working-directory: desktop
-        run: npm run dist ${{ matrix.target }}
+        # Publish explicitly DISABLED: electron-builder must only BUILD here.
+        # Its own GitHub publishing + the softprops upload step would each
+        # attach the installers, duplicating assets under different names
+        # (and latest.yml's sha512 then pointed at a stale asset).
+        #
+        # No env block here ON PURPOSE:
+        # - no CSC_LINK/APPLE_*: unset secrets arrive as EMPTY STRINGS and
+        #   electron-builder treats CSC_LINK as a certificate *path*,
+        #   resolving it against the project dir -> "desktop not a file"
+        #   on macOS. With no signing env at all, eb skips signing cleanly
+        #   (unsigned mac builds; Gatekeeper warns on first launch).
+        # - no GH_TOKEN: with a token AND a release tag on the current
+        #   commit, electron-builder v26 publishes on its own even with
+        #   --publish never (observed: a second "Nyx 1.0.0.exe" asset
+        #   appeared next to the workflow-uploaded one). Without a token
+        #   eb skips publishing; the upload step below is the only
+        #   publisher.
+        run: npm run dist -- ${{ matrix.target }} --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # electron-builder v26 still publishes on its own on TAG builds even
+          # with --publish never, whenever it can detect ANY token (observed in
+          # job logs: it uploaded a second asset). Force BOTH known token vars
+          # to empty strings -- step env overrides whatever the runner injects
+          # -- so its publish path is unreachable. The upload step below is
+          # the only publisher.
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ matrix.asset_pattern }}
+          # Re-running the release (re-tag) must REPLACE assets, not pile up
+          # duplicates -- GitHub renames on same-name conflict otherwise.
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
